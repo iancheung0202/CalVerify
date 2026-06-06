@@ -2,6 +2,8 @@ import discord
 import logging
 import os
 import asyncio
+import aiosqlite
+from datetime import datetime, timezone
 
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
@@ -31,6 +33,21 @@ CLASS_ROLES = {
     "Grad & Professional Student": None,
     "UCEAP": None
 }
+
+RULES_VC_ID = 1512641312724226108
+VC_DB_PATH = "vc_consent.db"
+
+RULES_EMBED_TEXT = (
+    "By joining this voice channel, you agree to **abide by the main server rules** in <#1009920353604218930> "
+    "and the [Berkeley Code of Student Conduct](https://conduct.berkeley.edu/code-of-conduct/).\n\n"
+    "**No Mic Spamming:** Avoid spamming, echo effects, or annoying use of your microphone or soundboard.\n\n"
+    "**No Unauthorized Recording:** Do not record or distribute any VC audio or video without the explicit, "
+    "collective consent of all participants.\n\n"
+    "**Moderation & Reporting:** Moderators will join the channel randomly to check. If you see any rule "
+    "violations, you must ping a moderator and report immediately.\n\n"
+    "**Accountability:** Participation is restricted to Verified Students. Misconduct may result in instant "
+    "removal from the server and reporting to UC Berkeley administration."
+)
 
 # Global bot client instance
 client: Optional[discord.Client] = None
@@ -69,6 +86,58 @@ async def init_discord_bot():
                 await cache_class_roles()
             else:
                 logger.warning(f"✗ Guild {GUILD_ID} not found. Bot may not be invited to the server.")
+            await init_vc_db()
+
+        @client.event
+        async def on_voice_state_update(
+            member: discord.Member,
+            before: discord.VoiceState,
+            after: discord.VoiceState,
+        ):
+            """Fires whenever any guild member's voice state changes."""
+            # Only care about someone newly joining our specific VC
+            joined_target_vc = (
+                after.channel is not None
+                and after.channel.id == RULES_VC_ID
+                and (before.channel is None or before.channel.id != RULES_VC_ID)
+            )
+            if not joined_target_vc:
+                return
+
+            # Skip bots
+            if member.bot:
+                return
+
+            # Skip already-whitelisted members
+            if await is_vc_whitelisted(member.id):
+                logger.info(f"Whitelisted user {member.id} joined VC — skipping rules prompt")
+                return
+
+            # The voice channel itself is messageable in discord.py 2.x
+            vc_channel = after.channel
+
+            rules_embed = discord.Embed(
+                title="📋 Voice Channel Rules",
+                description=RULES_EMBED_TEXT,
+                color=0xFDB515,  # Berkeley gold
+            ).set_footer(
+                text="You have 5 minutes to agree or you will be kicked from the channel."
+            )
+
+            view = VCRulesView(member=member)
+
+            try:
+                msg = await vc_channel.send(
+                    content=f"{member.mention} Please read and agree to the rules below to remain in this voice channel.",
+                    embed=rules_embed,
+                    view=view,
+                )
+                view.message = msg  # Give the view a reference so on_timeout can edit it
+                logger.info(f"Sent VC rules prompt to user {member.id} in channel {vc_channel.id}")
+            except discord.Forbidden:
+                logger.error(f"Missing permissions to send message in VC {vc_channel.id}")
+            except Exception as e:
+                logger.error(f"Error sending VC rules message: {e}")
         
         @client.event
         async def on_error(event, *args, **kwargs):
@@ -340,3 +409,130 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
     except Exception as e:
         logger.error(f"Error assigning role to {user_id}: {str(e)}")
         return False
+
+async def init_vc_db():
+    """Initialize the SQLite DB for VC consent tracking."""
+    async with aiosqlite.connect(VC_DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS vc_whitelist (
+                user_id INTEGER PRIMARY KEY,
+                agreed_at TEXT NOT NULL
+            )
+        """)
+        await db.commit()
+    logger.info("✓ VC consent DB initialized")
+
+
+async def is_vc_whitelisted(user_id: int) -> bool:
+    """Check if a user has previously agreed to VC rules."""
+    try:
+        async with aiosqlite.connect(VC_DB_PATH) as db:
+            async with db.execute(
+                "SELECT 1 FROM vc_whitelist WHERE user_id = ?", (user_id,)
+            ) as cursor:
+                return await cursor.fetchone() is not None
+    except Exception as e:
+        logger.error(f"DB error checking whitelist for {user_id}: {e}")
+        return False
+
+
+async def add_to_vc_whitelist(user_id: int):
+    """Permanently whitelist a user after they agree to VC rules."""
+    try:
+        async with aiosqlite.connect(VC_DB_PATH) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO vc_whitelist (user_id, agreed_at) VALUES (?, ?)",
+                (user_id, datetime.now(timezone.utc).isoformat())
+            )
+            await db.commit()
+        logger.info(f"User {user_id} added to VC whitelist")
+    except Exception as e:
+        logger.error(f"DB error whitelisting {user_id}: {e}")
+
+
+class VCRulesView(discord.ui.View):
+    """
+    View with an 'I agree' button for VC rules.
+    - On agree: edits message to confirmed state, whitelists user, stops.
+    - On timeout (5 min): disables button, edits message, replies pinging user, kicks from VC.
+    """
+
+    def __init__(self, member: discord.Member):
+        super().__init__(timeout=300)  # 5 minutes
+        self.member = member
+        self.message: Optional[discord.Message] = None  # Set after sending
+        self.agreed = False
+
+    @discord.ui.button(label="I agree", style=discord.ButtonStyle.success)
+    async def agree_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        # Only the target member can click
+        if interaction.user.id != self.member.id:
+            await interaction.response.send_message(
+                "This prompt is not for you.", ephemeral=True
+            )
+            return
+
+        self.agreed = True
+        await add_to_vc_whitelist(self.member.id)
+
+        button.disabled = True
+        button.label = "✅  Agreed"
+        button.style = discord.ButtonStyle.secondary
+
+        confirmed_embed = discord.Embed(
+            title="📋 Voice Channel Rules",
+            description=RULES_EMBED_TEXT,
+            color=0x57F287,  # Green
+        ).set_footer(text="Thank you for agreeing to the rules and being responsible in the server!")
+
+        await interaction.response.edit_message(embed=confirmed_embed, view=self)
+        self.stop()
+        logger.info(f"User {self.member.id} agreed to VC rules")
+
+    async def on_timeout(self):
+        """Fires after 5 minutes if user never clicked I Agree."""
+        if self.agreed:
+            return  # Already handled, race condition guard
+
+        # Disable the button on the original message
+        for item in self.children:
+            item.disabled = True
+
+        if self.message:
+            try:
+                timed_out_embed = discord.Embed(
+                    title="📋 Voice Channel Rules",
+                    description=RULES_EMBED_TEXT,
+                    color=0xED4245,  # Red
+                ).set_footer(
+                    text="You did not agree to the rules in time and have been kicked from the channel."
+                )
+                await self.message.edit(embed=timed_out_embed, view=self)
+
+                # Reply to the rules message pinging the user
+                await self.message.reply(
+                    f"{self.member.mention} You did not agree to the Voice Channel rules within "
+                    f"5 minutes and have been kicked from the channel."
+                )
+            except discord.NotFound:
+                logger.warning(f"Rules message not found for user {self.member.id} on timeout")
+            except Exception as e:
+                logger.error(f"Error editing rules message on timeout for {self.member.id}: {e}")
+
+        # Kick the member from the VC if they're still in it
+        try:
+            if (
+                self.member.voice
+                and self.member.voice.channel
+                and self.member.voice.channel.id == RULES_VC_ID
+            ):
+                await self.member.move_to(
+                    None, reason="Did not agree to VC rules within 5 minutes"
+                )
+                logger.info(f"Kicked user {self.member.id} from VC for not agreeing to rules")
+        except discord.Forbidden:
+            logger.error(f"Missing permissions to move member {self.member.id}")
+        except Exception as e:
+            logger.error(f"Error kicking member {self.member.id} from VC: {e}")
