@@ -384,7 +384,7 @@ def fetch_student_entries() -> List[Dict[str, Any]]:
         spreadsheet_data = sheets_service.spreadsheets().get(
             spreadsheetId=STUDENT_SHEET_ID,
             includeGridData=True,
-            ranges=["Form Responses 1!B:H"],
+            ranges=["Form Responses 1!B:I"],
             fields="sheets/data/rowData/values(userEnteredValue,userEnteredFormat/backgroundColor)"
         ).execute()
         sheet_data = spreadsheet_data.get('sheets', [{}])[0]
@@ -416,6 +416,7 @@ def fetch_student_entries() -> List[Dict[str, Any]]:
         discord_username_col = 4
         student_id_col = 5
         notes_col = 6
+        discord_user_id_col = 7
         
         # row_data[0] is the header row, so start from row_data[1]
         # Go from bottom to top (reverse order)
@@ -440,6 +441,7 @@ def fetch_student_entries() -> List[Dict[str, Any]]:
             discord_username = row[discord_username_col] if len(row) > discord_username_col else ""
             student_id = row[student_id_col] if len(row) > student_id_col else ""
             notes = row[notes_col] if len(row) > notes_col else ""
+            discord_user_id = row[discord_user_id_col] if len(row) > discord_user_id_col else ""
             if not student_id.strip():
                 continue
             bg_color = None
@@ -455,6 +457,7 @@ def fetch_student_entries() -> List[Dict[str, Any]]:
                 "discord_username": discord_username.strip(),
                 "student_id": student_id.strip(),
                 "notes": notes.strip(),
+                "discord_user_id": discord_user_id.strip(),
                 "background_color": bg_color,
                 "full_row": row
             })
@@ -773,6 +776,71 @@ async def update_entry_notes(request: Request):
     except Exception as e:
         logger.error(f"Error updating entry notes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update notes")
+    
+@app.post("/update-entry-discord-username")
+async def update_entry_discord_username(request: Request):
+    """Update the discord username (column F) for a student entry"""
+    if not verify_authentication(request):
+        raise HTTPException(status_code=401, detail="Not authenticated. Please login first.")
+    client_ip = get_client_ip(request)
+    if is_rate_limited(client_ip, search_requests, SEARCH_RATE_LIMIT, SEARCH_RATE_WINDOW):
+        raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
+    try:
+        data = await request.json()
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request")
+    row_index = data.get("row_index")
+    discord_username = data.get("discord_username", "")
+    if row_index is None or not isinstance(row_index, int) or row_index < 1:
+        raise HTTPException(status_code=400, detail="Invalid row index")
+    try:
+        if not sheets_service:
+            raise Exception("Google Sheets API not initialized")
+        cell_range = f"'Form Responses 1'!F{row_index + 1}"  # Column F = Discord Username
+        sheets_service.spreadsheets().values().update(
+            spreadsheetId=STUDENT_SHEET_ID,
+            range=cell_range,
+            valueInputOption="USER_ENTERED",
+            body={"values": [[discord_username]]}
+        ).execute()
+        logger.info(f"Updated discord username for row {row_index} to '{discord_username}'")
+        return {"success": True, "message": "Discord username updated successfully"}
+    except Exception as e:
+        logger.error(f"Error updating discord username: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update discord username")
+
+
+@app.post("/update-entry-discord-id")
+async def update_entry_discord_id(request: Request):
+    """Update the discord user ID (column I) for a student entry"""
+    if not verify_authentication(request):
+        raise HTTPException(status_code=401, detail="Not authenticated. Please login first.")
+    client_ip = get_client_ip(request)
+    if is_rate_limited(client_ip, search_requests, SEARCH_RATE_LIMIT, SEARCH_RATE_WINDOW):
+        raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
+    try:
+        data = await request.json()
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request")
+    row_index = data.get("row_index")
+    discord_user_id = data.get("discord_user_id", "")
+    if row_index is None or not isinstance(row_index, int) or row_index < 1:
+        raise HTTPException(status_code=400, detail="Invalid row index")
+    try:
+        if not sheets_service:
+            raise Exception("Google Sheets API not initialized")
+        cell_range = f"'Form Responses 1'!I{row_index + 1}"  # Column I = Discord User ID
+        sheets_service.spreadsheets().values().update(
+            spreadsheetId=STUDENT_SHEET_ID,
+            range=cell_range,
+            valueInputOption="USER_ENTERED",
+            body={"values": [[discord_user_id]]}
+        ).execute()
+        logger.info(f"Updated discord user ID for row {row_index} to '{discord_user_id}'")
+        return {"success": True, "message": "Discord user ID updated successfully"}
+    except Exception as e:
+        logger.error(f"Error updating discord user ID: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update discord user ID")
 
 
 @app.get("/roles")

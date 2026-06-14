@@ -2365,6 +2365,10 @@
                             </p>
                             <p style="margin: 2px 0 0 0; font-size: 13px; color: #666;">
                                 Discord Username: <span id="currentDiscordUsername" style="font-weight: 600;">-</span>
+                                <button type="button" id="btnEditDiscordUsername" title="Edit discord username" style="background: none; border: none; cursor: pointer; padding: 0 0 0 6px; color: #2c3e50; font-size: 13px; vertical-align: middle;"><i class="fas fa-pen"></i></button>
+                            </p>
+                            <p style="margin: 2px 0 0 0; font-size: 13px; color: #666; display: none;" id="discordUserIdContainer">
+                                Discord ID: <span id="currentDiscordUserId" style="font-weight: 600;">-</span>
                             </p>
                             <p style="margin: 2px 0 0 0; font-size: 13px; color: #666;">
                                 Graduating Class: <span id="currentGraduatingClass" style="font-weight: 600;">-</span>
@@ -2660,6 +2664,8 @@
         const currentGraduatingClass = document.getElementById('currentGraduatingClass');
         const currentNotes = document.getElementById('currentNotes');
         const notesContainer = document.getElementById('notesContainer');
+        const currentDiscordUserId = document.getElementById('currentDiscordUserId');
+        const discordUserIdContainer = document.getElementById('discordUserIdContainer');
         
         // Entry search elements 
         const entrySearchForm = document.getElementById('entrySearch');
@@ -2850,6 +2856,14 @@
                 notesContainer.style.display = 'none';
             }
 
+            // Show discord user ID only if it exists
+            if (entry.discord_user_id) {
+                currentDiscordUserId.textContent = entry.discord_user_id;
+                discordUserIdContainer.style.display = 'block';
+            } else {
+                discordUserIdContainer.style.display = 'none';
+            }
+
             // Update entry navigation border color based on cell background color
             if (entry.background_color) {
                 entryNavigation.style.borderColor = entry.background_color;
@@ -3021,6 +3035,7 @@
         
         // Modal state
         let currentModalEntry = null;
+        let currentModalProfile = null;
         let isRoleAssigning = false;
         
         // Entry search event listeners
@@ -3090,6 +3105,10 @@
 
         btnNotes.addEventListener('click', () => {
             showNotesPrompt();
+        });
+
+        document.getElementById('btnEditDiscordUsername').addEventListener('click', () => {
+            showDiscordUsernamePrompt();
         });
 
         // Updates a specific entry in the cached studentEntries without reloading all
@@ -3454,6 +3473,7 @@
             }
             
             currentModalEntry = entry;
+            currentModalProfile = null;
             
             // Reset modal state
             roleDropdown.value = '';
@@ -3497,7 +3517,25 @@
                 }
                 
                 if (data.success && data.profile) {
-                    // Show profile
+                    // Store profile and show it
+                    currentModalProfile = data.profile;
+
+                    // Auto-correct the stored discord username to the real one if they differ.
+                    // This covers: @ prefix, display-name-only matches, and single-result fuzzy matches.
+                    const actualUsername = data.profile.username;
+                    const storedUsername = (entry.discord_username || '').replace(/^@/, '').toLowerCase();
+                    if (actualUsername && actualUsername.toLowerCase() !== storedUsername) {
+                        const rowIndex = entry.row_index;
+                        const updated = await updateEntryDiscordUsername(rowIndex, actualUsername);
+                        if (updated) {
+                            const entryIdx = studentEntries.findIndex(e => e.row_index === rowIndex);
+                            if (entryIdx !== -1) {
+                                studentEntries[entryIdx].discord_username = actualUsername;
+                            }
+                            currentModalEntry.discord_username = actualUsername;
+                        }
+                    }
+
                     displayDiscordProfile(data.profile);
                     profileLoading.style.display = 'none';
                     profileContent.style.display = 'flex';
@@ -3545,6 +3583,7 @@
             verifyModal.classList.remove('active');
             verifyModalBackdrop.classList.remove('active');
             currentModalEntry = null;
+            currentModalProfile = null;
             isRoleAssigning = false;
         }
         
@@ -3749,6 +3788,14 @@
                 notesContainer.style.display = 'none';
             }
 
+            // Show discord user ID only if it exists
+            if (entry.discord_user_id) {
+                currentDiscordUserId.textContent = entry.discord_user_id;
+                discordUserIdContainer.style.display = 'block';
+            } else {
+                discordUserIdContainer.style.display = 'none';
+            }
+
             // Update entry navigation border color
             if (entry.background_color) {
                 entryNavigation.style.borderColor = entry.background_color;
@@ -3897,6 +3944,10 @@
                 
                 // Color row green
                 await updateEntryColor(rowIndex, '#D9EAD3');
+                
+                // Save Discord user ID to sheet
+                await updateEntryDiscordId(rowIndex, String(userId));
+                
                 showToast(`Student verified with role '${roleName}'!`, 'success');
                 
             } catch (err) {
@@ -3917,13 +3968,98 @@
             if (!currentModalEntry || isRoleAssigning) return;
             
             const rowIndex = currentModalEntry.row_index;
+            const profileForId = currentModalProfile; // capture before closing
             closeVerifyModal();
             showToast('Marking student as verified (without role assignment)...', 'info');
             
             // Color row green without role assignment
             await updateEntryColor(rowIndex, '#D9EAD3');
+            
+            // Save Discord user ID if profile was loaded
+            if (profileForId && profileForId.user_id) {
+                await updateEntryDiscordId(rowIndex, String(profileForId.user_id));
+            }
+            
             showToast('Student verified!', 'success');
         });
+
+        // Update discord username on the sheet and in local cache
+        async function updateEntryDiscordUsername(rowIndex, newUsername) {
+            try {
+                const response = await fetch('/update-entry-discord-username', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {'Content-Type': 'application/json', 'Referer': window.location.href},
+                    body: JSON.stringify({row_index: rowIndex, discord_username: newUsername})
+                });
+                if (!response.ok) {
+                    if (response.status === 401) { handleUnauthorized(); return false; }
+                    const data = await response.json();
+                    throw new Error(data.detail || 'Failed to update discord username');
+                }
+                return true;
+            } catch (err) {
+                showToast(`Error: ${err.message}`, 'error');
+                console.error('Error updating discord username:', err);
+                return false;
+            }
+        }
+
+        // Update discord user ID on the sheet and in local cache
+        async function updateEntryDiscordId(rowIndex, discordUserId) {
+            try {
+                const response = await fetch('/update-entry-discord-id', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {'Content-Type': 'application/json', 'Referer': window.location.href},
+                    body: JSON.stringify({row_index: rowIndex, discord_user_id: discordUserId})
+                });
+                if (!response.ok) {
+                    if (response.status === 401) { handleUnauthorized(); return false; }
+                    const data = await response.json();
+                    throw new Error(data.detail || 'Failed to update discord user ID');
+                }
+                // Update local cache immediately
+                const entryIdx = studentEntries.findIndex(e => e.row_index === rowIndex);
+                if (entryIdx !== -1) {
+                    studentEntries[entryIdx].discord_user_id = discordUserId;
+                    if (entryIdx === currentEntryIdx) updateCurrentEntry();
+                }
+                return true;
+            } catch (err) {
+                console.error('Error updating discord user ID:', err);
+                // Non-fatal: don't toast since verification already succeeded
+                return false;
+            }
+        }
+
+        // Prompt to edit the discord username for the current entry
+        async function showDiscordUsernamePrompt() {
+            if (!studentEntries[currentEntryIdx]) return;
+            
+            const current = studentEntries[currentEntryIdx].discord_username || '';
+            const newUsername = prompt('Enter or edit Discord username:', current);
+            
+            if (newUsername === null) return; // User cancelled
+            
+            const buttons = document.querySelectorAll('.btn-action');
+            buttons.forEach(btn => btn.classList.add('loading'));
+            document.getElementById('btnEditDiscordUsername').disabled = true;
+            
+            try {
+                const rowIndex = studentEntries[currentEntryIdx].row_index;
+                const success = await updateEntryDiscordUsername(rowIndex, newUsername.trim());
+                if (success) {
+                    // Update local cache immediately
+                    studentEntries[currentEntryIdx].discord_username = newUsername.trim();
+                    updateCurrentEntry();
+                    showToast('Discord username updated successfully', 'success');
+                }
+            } finally {
+                buttons.forEach(btn => btn.classList.remove('loading'));
+                document.getElementById('btnEditDiscordUsername').disabled = false;
+            }
+        }
 
         // Manage Sheets Modal Logic
 

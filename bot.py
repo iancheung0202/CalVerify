@@ -35,18 +35,16 @@ CLASS_ROLES = {
 }
 
 RULES_VC_ID = 1512641312724226108
-VC_DB_PATH = "vc_consent.db"
+VC_DB_PATH = "vc_whitelist.db"
 
 RULES_EMBED_TEXT = (
-    "By joining this voice channel, you agree to **abide by the main server rules** in <#1009920353604218930> "
+    "By joining this voice channel, in addition to the following rules, you agree to **abide by the main server rules** in <#1009920353604218930> "
     "and the [Berkeley Code of Student Conduct](https://conduct.berkeley.edu/code-of-conduct/).\n\n"
-    "**No Mic Spamming:** Avoid spamming, echo effects, or annoying use of your microphone or soundboard.\n\n"
-    "**No Unauthorized Recording:** Do not record or distribute any VC audio or video without the explicit, "
-    "collective consent of all participants.\n\n"
-    "**Moderation & Reporting:** Moderators will join the channel randomly to check. If you see any rule "
-    "violations, you must ping a moderator and report immediately.\n\n"
-    "**Accountability:** Participation is restricted to Verified Students. Misconduct may result in instant "
-    "removal from the server and reporting to UC Berkeley administration."
+    "- Avoid spamming, echo effects, or annoying use of your microphone or soundboard.\n"
+    "- Do not record or distribute any VC audio or video without the explicit, collective consent of all participants.\n"
+    "- Moderators may join the VC randomly to perform checks. If a moderator is not present and you see any rule violations, you must ping a moderator and report immediately.\n"
+    "- Only UC Berkeley students may join this voice channel. Misconduct may result in instant removal from the server and reporting to UC Berkeley administration.\n"
+    "- Video, streaming, and soundboard are currently disabled and may be enabled in the future if the channel is proven to be a safe and responsible space."
 )
 
 # Global bot client instance
@@ -70,10 +68,9 @@ async def init_discord_bot():
     
     try:
         # Create bot with minimal intents for efficiency
-        intents = discord.Intents.default()
-        intents.members = True
+        intents = discord.Intents.none()
+        intents.voice_states = True
         intents.guilds = True
-        
         client = discord.Client(intents=intents)
         
         @client.event
@@ -156,7 +153,7 @@ async def init_discord_bot():
 
 
 async def cache_class_roles():
-    """Cache class role objects from guild"""
+    """Cache class role objects from guild using direct API fetching"""
     global CLASS_ROLES
     
     if not guild:
@@ -164,11 +161,16 @@ async def cache_class_roles():
         return
     
     try:
+        # Pull fresh roles directly from the API
+        api_roles = await guild.fetch_roles()
+        
+        # Convert the role list into a temporary lookup dictionary for fast scanning
+        roles_by_name = {role.name: role for role in api_roles}
+        
         for role_name in CLASS_ROLES.keys():
-            role = discord.utils.get(guild.roles, name=role_name)
+            role = roles_by_name.get(role_name)
             if role:
                 CLASS_ROLES[role_name] = role
-                # logger.info(f"Cached role: {role_name} (ID: {role.id})")
             else:
                 logger.warning(f"Role not found in guild: {role_name}")
     except Exception as e:
@@ -176,36 +178,46 @@ async def cache_class_roles():
 
 
 async def get_discord_user_by_username(username: str) -> Optional[discord.Member]:
-    """
-    Search for a Discord user by username in the guild.
-    
-    Args:
-        username: Discord username to search for
-    
-    Returns:
-        discord.Member object if found, None otherwise
-    """
-    if not guild:
-        logger.error("Guild not available - Discord bot may not be connected")
-        return None
-    
-    if not client or not client.is_ready():
-        logger.error("Discord bot not ready")
+    if not guild or not client or not client.is_ready():
+        logger.error("Guild or Client not available")
         return None
     
     try:
-        # discord.utils.get searches through the guild's cached members
-        member = discord.utils.get(guild.members, name=username)
-        
-        if member:
-            logger.info(f"Found Discord user: {username} (ID: {member.id})")
-            return member
-        else:
-            logger.warning(f"Discord user not found: {username}")
+        # Strip leading @ if present before querying
+        query = username.lstrip('@')
+        query_lower = query.lower()
+
+        # Query up to 100 members — searches both username and display name/nickname
+        members = await guild.query_members(query=query, limit=100)
+
+        if not members:
+            logger.warning(f"Discord user not found via query: {username}")
             return None
+
+        # 1. Exact username match (member.name is the unique Discord username, no @)
+        for member in members:
+            if member.name.lower() == query_lower:
+                logger.info(f"Found Discord user by exact username: {query} (ID: {member.id})")
+                return member
+
+        # 2. Only one result returned — use it (frontend will correct stored username if needed)
+        if len(members) == 1:
+            member = members[0]
+            logger.info(f"Found single Discord member via query '{query}': {member.name} (ID: {member.id})")
+            return member
+
+        # 3. No exact username match, but exactly one display name (nickname) match
+        display_matches = [m for m in members if m.display_name.lower() == query_lower]
+        if len(display_matches) == 1:
+            member = display_matches[0]
+            logger.info(f"Found Discord user by display name '{query}' → actual username: {member.name} (ID: {member.id})")
+            return member
+
+        logger.warning(f"Discord user not found via query: {username}")
+        return None
     
     except Exception as e:
-        logger.error(f"Error searching for Discord user {username}: {str(e)}")
+        logger.error(f"Error querying for Discord user {username}: {str(e)}")
         return None
 
 
@@ -228,7 +240,7 @@ async def get_discord_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
         return None
     
     try:
-        member = guild.get_member(user_id)
+        member = await guild.fetch_member(user_id)
         
         if not member:
             logger.warning(f"Member not found in guild: {user_id}")
@@ -273,14 +285,38 @@ async def get_discord_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
         if hasattr(user, 'primary_guild') and user.primary_guild:
             primary_guild = str(user.primary_guild)
         
-        # Get all roles
-        all_roles = [role.name for role in member.roles[1:]]  # Exclude @everyone
-        
+        # Get all roles via REST API (no Guild Members intent required)
+        # guild.fetch_member() populates roles from cache which needs the privileged intent,
+        # so we call the endpoint directly and resolve role IDs against guild.roles instead.
+        try:
+            member_data = await client.http.request(
+                discord.http.Route(
+                    "GET",
+                    "/guilds/{guild_id}/members/{user_id}",
+                    guild_id=GUILD_ID,
+                    user_id=user_id,
+                )
+            )
+            role_ids: set[str] = set(member_data.get("roles", []))
+        except Exception as e:
+            logger.warning(f"Could not fetch role IDs via REST for {user_id}: {e}")
+            role_ids = set()
+
+        # guild.roles is populated from the guilds intent (non-privileged) — always available
+        guild_role_map: dict[str, str] = {str(r.id): r.name for r in guild.roles}
+
+        all_roles = [
+            guild_role_map[rid]
+            for rid in role_ids
+            if rid in guild_role_map
+        ]
+
         # Find existing class roles
         existing_class_role = None
-        for role in member.roles:
-            if role.name in CLASS_ROLES:
-                existing_class_role = role.name
+        for rid in role_ids:
+            role_name_candidate = guild_role_map.get(rid)
+            if role_name_candidate in CLASS_ROLES:
+                existing_class_role = role_name_candidate
                 break
         
         # Get raw status
@@ -339,7 +375,7 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
         return False
     
     try:
-        member = guild.get_member(user_id)
+        member = await guild.fetch_member(user_id)
         if not member:
             logger.error(f"Member not found: {user_id}")
             return False
@@ -365,7 +401,9 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
             return True
         
         # Assign new role
-        await member.add_roles(discord.utils.get(guild.roles, id=MAIN_ROLE_ID), reason="Verified student on dashboard")
+        # Using discord.Object bypasses the need to search the role list by ID entirely
+        main_role_obj = discord.Object(id=MAIN_ROLE_ID)
+        await member.add_roles(main_role_obj, reason="Verified student on dashboard")
         await member.add_roles(role, reason="Verified student on dashboard")
         logger.info(f"Assigned role '{role_name}' to user {user_id}")
         
@@ -396,7 +434,7 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
         # Send server welcome message
         if send_welcome_msg:
             try:
-                channel = client.get_channel(1009928284173242448)
+                channel = await client.fetch_channel(1009928284173242448)
                 if channel:
                     await channel.send(f"Welcome {member.mention} as our newest Golden Bear! <:bearWave:1105561126164504576> ")
                 else:
