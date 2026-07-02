@@ -2442,7 +2442,7 @@
 
                     <!-- No Results State -->
                     <div class="no-results" id="noResults" style="display: none;">
-                        <p>No results found. Try a different search term.</p>
+                        <p>No results found. Try a different search term (name, email, or ID number).</p>
                     </div>
                 </div>
             </div>
@@ -2894,10 +2894,10 @@
             prevBtn.disabled = currentEntryIdx === 0;
             nextBtn.disabled = currentEntryIdx === studentEntries.length - 1;
 
-            // Auto-search for the student ID (skip when already in entry search display)
-            if (entry.student_id) {
-                searchInput.value = entry.student_id;
-                performSearch(entry.student_id);
+            // Auto-search for the student's email (skip when already in entry search display)
+            if (entry.email) {
+                searchInput.value = entry.email;
+                performSearch(entry.email);
             }
         }
 
@@ -3759,10 +3759,10 @@
             prevUnverifiedBtn.disabled = false;
             nextUnverifiedBtn.disabled = false;
             
-            // Auto-search for the student ID in database (even in search mode)
-            if (matchedEntry.student_id) {
-                searchInput.value = matchedEntry.student_id;
-                performSearch(matchedEntry.student_id);
+            // Auto-search for the student's email in database (even in search mode)
+            if (matchedEntry.email) {
+                searchInput.value = matchedEntry.email;
+                performSearch(matchedEntry.email);
             }
             
             // Display entry with highlighting
