@@ -413,10 +413,10 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
                 title="<:bearWave:1105561126164504576> Welcome to the UC Berkeley Discord Server!",
                 description=(
                     f"Hi {member.mention}! You're **officially verified** as `{role_name}`! "
-                    "We are incredibly delighted to welcome you into this community, built **for students like you**. 💛💙\n"
+                    "We are incredibly delighted to welcome you into this community, built **for students like you**. Please kindly review the [server rules](https://discord.com/channels/1009918541601980496/1009920353604218930). 💛💙\n"
                     "### **Ready to jump in? Here is your quick-start guide:**\n"
                     "1. Head over to <#1106664283250626671> and drop a quick intro about yourself!\n"
-                    "2. Say hi to and talk with your peers in <#1009928284173242448>.\n"
+                    "2. Say hi in <#1009928284173242448> and chat with other students.\n"
                     "3. Got questions about classes, housing, or campus life? Don't be shy to ask right in chat or in <#1383249847116759161>.\n\n"
                 ),
                 color=0xFDB515
@@ -436,7 +436,7 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
             try:
                 channel = await client.fetch_channel(1009928284173242448)
                 if channel:
-                    await channel.send(f"Welcome {member.mention} as our newest Golden Bear! <:bearWave:1105561126164504576> ")
+                    await channel.send(content=f"<:bearWave:1105561126164504576> {member.mention}, welcome to the server!", embed=discord.Embed(description=f"{member.mention} is our newest Golden Bear here! <:besties:1525744373906542714> **Go Bears!**", color=0xFDB515))
                 else:
                     logger.warning("Could not find #all-class-chat channel (ID 1009928284173242448)")
             except Exception as e:
