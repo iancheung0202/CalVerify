@@ -422,9 +422,9 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
                 color=0xFDB515
             ).set_footer(text="If you need any help, feel free to reach out to the moderators! Go Bears! 🐻")
             view = discord.ui.View()
-            view.add_item(discord.ui.Button(label="👋 Introduce Yourself", url="https://discord.com/channels/1009918541601980496/1106664283250626671", style=discord.ButtonStyle.link))
-            view.add_item(discord.ui.Button(label="💬 Chat with Students", url="https://discord.com/channels/1009918541601980496/1009928284173242448", style=discord.ButtonStyle.link))
-            view.add_item(discord.ui.Button(label="❓ Ask a Question", url="https://discord.com/channels/1009918541601980496/1383249847116759161", style=discord.ButtonStyle.link))
+            view.add_item(discord.ui.Button(emoji="👋", label="Introduce Yourself", url="https://discord.com/channels/1009918541601980496/1106664283250626671", style=discord.ButtonStyle.link))
+            view.add_item(discord.ui.Button(emoji="💬", label="Chat with Students", url="https://discord.com/channels/1009918541601980496/1009928284173242448", style=discord.ButtonStyle.link))
+            view.add_item(discord.ui.Button(emoji="❓", label="Ask a Question", url="https://discord.com/channels/1009918541601980496/1383249847116759161", style=discord.ButtonStyle.link))
             await member.send(embed=embed, view=view)
         except discord.Forbidden:
             logger.warning(f"Could not send DM to {user_id} (DMs disabled)")
@@ -436,7 +436,7 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
             try:
                 channel = await client.fetch_channel(1009928284173242448)
                 if channel:
-                    await channel.send(content=f"<:bearWave:1105561126164504576> {member.mention}, welcome to the server!", embed=discord.Embed(description=f"{member.mention} is our newest Golden Bear here! <:besties:1525744373906542714> **Go Bears!**", color=0xFDB515))
+                    await channel.send(content=f"<:bearWave:1105561126164504576> {member.mention} is our newest Golden Bear here! **Go Bears!** <:besties:1525744373906542714>")
                 else:
                     logger.warning("Could not find #all-class-chat channel (ID 1009928284173242448)")
             except Exception as e:

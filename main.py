@@ -401,17 +401,18 @@ def fetch_student_entries() -> List[Dict[str, Any]]:
             b = round((color_dict.get('blue', 0) or 0) * 255)
             return f"#{r:02x}{g:02x}{b:02x}"
             
-        # Column indices for range B:H (shifted by 1 from A:Z):
-        # B = index 0 (Status - background color)
+        # Column indices for range B:I (shifted by 1 from A:Z):
+        # B = index 0 (Berkeley Email (verified by Google), Status from cell background)
         # C = index 1 (First and Last Name)
-        # D = index 2 (Berkeley Email)
+        # D = index 2 (Self-reported Email - OBSOLETE, not used)
         # E = index 3 (Graduating Class)
         # F = index 4 (Discord Username)
         # G = index 5 (Berkeley Student ID)
         # H = index 6 (Manual Notes)
+        # I = index 7 (Discord User ID)
         status_col = 0
         name_col = 1
-        email_col = 2
+        email_col = 0
         graduating_class_col = 3
         discord_username_col = 4
         student_id_col = 5
@@ -843,6 +844,18 @@ async def update_entry_discord_id(request: Request):
         raise HTTPException(status_code=500, detail="Failed to update discord user ID")
 
 
+@app.get("/me")
+async def get_current_user(request: Request):
+    """Return the current authenticated user's email"""
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not session_token or session_token not in authenticated_sessions:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    session_data = authenticated_sessions[session_token]
+    if time.time() > session_data.get("expires_at", 0):
+        del authenticated_sessions[session_token]
+        raise HTTPException(status_code=401, detail="Session expired")
+    return {"email": session_data.get("email", "")}
+
 @app.get("/roles")
 async def get_roles(request: Request):
     """Get list of authorized emails"""
@@ -895,7 +908,14 @@ async def remove_role(request: Request):
         
     if email == "iancheung@berkeley.edu":
         raise HTTPException(status_code=403, detail="Cannot remove the master administrator")
-        
+    
+    # Prevent self-removal
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_token and session_token in authenticated_sessions:
+        session_email = authenticated_sessions[session_token].get("email", "").lower()
+        if session_email == email:
+            raise HTTPException(status_code=403, detail="You cannot remove yourself")
+    
     manifest = load_manifest()
     emails = manifest.get("authorizedEmails", [])
     

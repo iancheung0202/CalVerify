@@ -2359,9 +2359,11 @@
                             </p>
                             <p style="margin: 2px 0 0 0; font-size: 13px; color: #666;">
                                 Email: <span id="currentEmail" style="font-weight: 600;">-</span>
+                                <button type="button" id="btnSearchEmail" title="Search email in database" style="background: none; border: none; cursor: pointer; padding: 0 0 0 6px; color: #2c3e50; font-size: 13px; vertical-align: middle;"><i class="fas fa-search"></i></button>
                             </p>
                             <p style="margin: 2px 0 0 0; font-size: 13px; color: #666;">
                                 Student ID: <span id="currentStudentId" style="font-weight: 600;">-</span>
+                                <button type="button" id="btnSearchStudentId" title="Search student ID in database" style="background: none; border: none; cursor: pointer; padding: 0 0 0 6px; color: #2c3e50; font-size: 13px; vertical-align: middle;"><i class="fas fa-search"></i></button>
                             </p>
                             <p style="margin: 2px 0 0 0; font-size: 13px; color: #666;">
                                 Discord Username: <span id="currentDiscordUsername" style="font-weight: 600;">-</span>
@@ -2674,6 +2676,7 @@
         const entrySearchCounter = document.getElementById('entrySearchCounter');
 
         let isAuthenticated = false;
+        let currentUserEmail = '';
         let studentEntries = [];
         let currentEntryIdx = 0;
         
@@ -2730,6 +2733,15 @@
             isAuthenticated = sessionStorage.getItem('calverify_auth') === 'true';
             if (isAuthenticated) {
                 showSearchPage();
+                try {
+                    const meRes = await fetch('/me', { credentials: 'include' });
+                    if (meRes.ok) {
+                        const meData = await meRes.json();
+                        currentUserEmail = meData.email || '';
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch current user email:', e);
+                }
                 await loadStudentEntries();
             } else {
                 showLoginPage();
@@ -2750,6 +2762,7 @@
                 if (loginRes.ok) {
                     sessionStorage.setItem('calverify_auth', 'true');
                     isAuthenticated = true;
+                    currentUserEmail = data.email || '';
                     showSearchPage();
                     await loadStudentEntries();
                 } else {
@@ -3109,6 +3122,22 @@
 
         document.getElementById('btnEditDiscordUsername').addEventListener('click', () => {
             showDiscordUsernamePrompt();
+        });
+
+        document.getElementById('btnSearchEmail').addEventListener('click', () => {
+            const entry = studentEntries[currentEntryIdx];
+            if (entry && entry.email) {
+                searchInput.value = entry.email;
+                performSearch(entry.email);
+            }
+        });
+
+        document.getElementById('btnSearchStudentId').addEventListener('click', () => {
+            const entry = studentEntries[currentEntryIdx];
+            if (entry && entry.student_id) {
+                searchInput.value = entry.student_id;
+                performSearch(entry.student_id);
+            }
         });
 
         // Updates a specific entry in the cached studentEntries without reloading all
@@ -4338,20 +4367,19 @@
                     
                     row.appendChild(span);
 
-                    if (email !== permanentEmail) {
-                        const btn = document.createElement('button');
-                        btn.textContent = 'Remove';
-                        btn.style.cssText = 'background: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; flex-shrink: 0; transition: background 0.2s;';
+                    const isPermanent = email === permanentEmail;
+                    const isSelf = email === currentUserEmail;
+                    const disabled = isPermanent || isSelf;
+
+                    const btn = document.createElement('button');
+                    btn.textContent = 'Remove';
+                    btn.style.cssText = `background: #e74c3c; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 13px; flex-shrink: 0; transition: background 0.2s;${disabled ? ' opacity: 0.5; cursor: not-allowed;' : ' cursor: pointer;'}`;
+                    if (!disabled) {
                         btn.onmouseover = () => btn.style.background = '#c0392b';
                         btn.onmouseout = () => btn.style.background = '#e74c3c';
                         btn.onclick = () => removeRole(email);
-                        row.appendChild(btn);
-                    } else {
-                        const badge = document.createElement('span');
-                        badge.textContent = 'Admin';
-                        badge.style.cssText = 'background: #2c3e50; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; flex-shrink: 0; user-select: none;';
-                        row.appendChild(badge);
                     }
+                    row.appendChild(btn);
                     
                     rolesList.appendChild(row);
                 });
