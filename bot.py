@@ -4,7 +4,6 @@ import os
 import asyncio
 import aiosqlite
 from datetime import datetime, timezone
-
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
@@ -12,13 +11,12 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GUILD_ID = 1009918541601980496  # Discord server ID
-MAIN_ROLE_ID = 1506760833051394119
-CLASS_ROLES = {
-    # Will be fetched/cached
+TOKEN = os.getenv("BOT_TOKEN")
+GUILD = int(os.getenv("DISCORD_GUILD_ID", "0"))
+MAIN_ROLE = int(os.getenv("DISCORD_MAIN_ROLE_ID", "0"))
+ROLES = {
     "Class of 2030": None,
-    "Class of 2029": None,  
+    "Class of 2029": None,
     "Class of 2028": None,
     "Class of 2027": None,
     "Class of 2026": None,
@@ -34,10 +32,10 @@ CLASS_ROLES = {
     "UCEAP": None
 }
 
-RULES_VC_ID = 1512641312724226108
-VC_DB_PATH = "vc_whitelist.db"
+VC_ID = int(os.getenv("DISCORD_VC_CHANNEL_ID", "0"))
+VC_DB = "vc_whitelist.db"
 
-RULES_EMBED_TEXT = (
+RULES_TEXT = (
     "By joining this voice channel, in addition to the following rules, you agree to **abide by the main server rules** in <#1009920353604218930> "
     "and the [Berkeley Code of Student Conduct](https://conduct.berkeley.edu/code-of-conduct/).\n\n"
     "- Avoid spamming, echo effects, or annoying use of your microphone or soundboard.\n"
@@ -47,367 +45,244 @@ RULES_EMBED_TEXT = (
     "- Video, streaming, and soundboard are currently disabled and may be enabled in the future if the channel is proven to be a safe and responsible space."
 )
 
-# Global bot client instance
 client: Optional[discord.Client] = None
 guild: Optional[discord.Guild] = None
-_bot_connect_task = None
+bot_task = None
 
 
-async def init_discord_bot():
-    """Initialize Discord bot client and connect to guild"""
-    global client, _bot_connect_task
-    
-    if not BOT_TOKEN:
+async def init_bot():
+    global client, bot_task
+    if not TOKEN:
         logger.error("BOT_TOKEN not found in .env - Discord bot will not start")
         return False
-    
-    # Validate token format (should be a string)
-    if not isinstance(BOT_TOKEN, str) or len(BOT_TOKEN) < 10:
-        logger.error(f"BOT_TOKEN appears invalid (length: {len(BOT_TOKEN)})")
+    if not isinstance(TOKEN, str) or len(TOKEN) < 10:
+        logger.error(f"BOT_TOKEN appears invalid (length: {len(TOKEN)})")
         return False
-    
+    if not GUILD or not MAIN_ROLE or not VC_ID:
+        logger.error("DISCORD_GUILD_ID, DISCORD_MAIN_ROLE_ID, and DISCORD_VC_CHANNEL_ID must be set in .env")
+        return False
     try:
-        # Create bot with minimal intents for efficiency
         intents = discord.Intents.none()
         intents.voice_states = True
         intents.guilds = True
         client = discord.Client(intents=intents)
-        
+
         @client.event
         async def on_ready():
             global guild
-            logger.info(f"✓ Discord bot connected as {client.user}")
-            guild = client.get_guild(GUILD_ID)
+            logger.info(f"Discord bot connected as {client.user}")
+            guild = client.get_guild(GUILD)
             if guild:
-                logger.info(f"✓ Connected to guild: {guild.name} ({guild.id})")
-                await cache_class_roles()
+                logger.info(f"Connected to guild: {guild.name} ({guild.id})")
+                await cache_roles()
             else:
-                logger.warning(f"✗ Guild {GUILD_ID} not found. Bot may not be invited to the server.")
+                logger.warning(f"Guild {GUILD} not found.")
             await init_vc_db()
 
         @client.event
-        async def on_voice_state_update(
-            member: discord.Member,
-            before: discord.VoiceState,
-            after: discord.VoiceState,
-        ):
-            """Fires whenever any guild member's voice state changes."""
-            # Only care about someone newly joining our specific VC
-            joined_target_vc = (
-                after.channel is not None
-                and after.channel.id == RULES_VC_ID
-                and (before.channel is None or before.channel.id != RULES_VC_ID)
-            )
-            if not joined_target_vc:
+        async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+            joined = after.channel is not None and after.channel.id == VC_ID and (before.channel is None or before.channel.id != VC_ID)
+            if not joined:
                 return
-
-            # Skip bots
             if member.bot:
                 return
-
-            # Skip already-whitelisted members
-            if await is_vc_whitelisted(member.id):
-                logger.info(f"Whitelisted user {member.id} joined VC — skipping rules prompt")
+            if await is_whitelisted(member.id):
+                logger.info(f"Whitelisted user {member.id} joined VC")
                 return
-
-            # The voice channel itself is messageable in discord.py 2.x
-            vc_channel = after.channel
-
-            rules_embed = discord.Embed(
-                title="📋 Voice Channel Rules",
-                description=RULES_EMBED_TEXT,
-                color=0xFDB515,  # Berkeley gold
-            ).set_footer(
-                text="You have 5 minutes to agree or you will be kicked from the channel."
-            )
-
-            view = VCRulesView(member=member)
-
+            channel = after.channel
+            embed = discord.Embed(
+                title="Voice Channel Rules",
+                description=RULES_TEXT,
+                color=0xFDB515,
+            ).set_footer(text="You have 5 minutes to agree or you will be kicked from the channel.")
+            view = RulesView(member=member)
             try:
-                msg = await vc_channel.send(
+                msg = await channel.send(
                     content=f"{member.mention} Please read and agree to the rules below to remain in this voice channel.",
-                    embed=rules_embed,
+                    embed=embed,
                     view=view,
                 )
-                view.message = msg  # Give the view a reference so on_timeout can edit it
-                logger.info(f"Sent VC rules prompt to user {member.id} in channel {vc_channel.id}")
+                view.message = msg
+                logger.info(f"Sent VC rules prompt to user {member.id} in channel {channel.id}")
             except discord.Forbidden:
-                logger.error(f"Missing permissions to send message in VC {vc_channel.id}")
+                logger.error(f"Missing permissions to send message in VC {channel.id}")
             except Exception as e:
                 logger.error(f"Error sending VC rules message: {e}")
-        
+
         @client.event
         async def on_error(event, *args, **kwargs):
             logger.error(f"Discord bot error in {event}", exc_info=True)
-        
-        logger.info(f"Starting Discord bot connection (Token: {BOT_TOKEN[:20]}...)")
-        # Start the bot in background (but don't await it)
-        _bot_connect_task = asyncio.create_task(client.start(BOT_TOKEN))
+
+        logger.info("Starting Discord bot connection")
+        bot_task = asyncio.create_task(client.start(TOKEN))
         logger.info("Discord bot startup task created")
-        
         return True
-    
     except Exception as e:
         logger.error(f"Error initializing Discord bot: {str(e)}", exc_info=True)
         return False
 
 
-async def cache_class_roles():
-    """Cache class role objects from guild using direct API fetching"""
-    global CLASS_ROLES
-    
+async def cache_roles():
+    global ROLES
     if not guild:
         logger.warning("Guild not available for role caching")
         return
-    
     try:
-        # Pull fresh roles directly from the API
-        api_roles = await guild.fetch_roles()
-        
-        # Convert the role list into a temporary lookup dictionary for fast scanning
-        roles_by_name = {role.name: role for role in api_roles}
-        
-        for role_name in CLASS_ROLES.keys():
-            role = roles_by_name.get(role_name)
+        role_list = await guild.fetch_roles()
+        role_map = {role.name: role for role in role_list}
+        for role_name in ROLES.keys():
+            role = role_map.get(role_name)
             if role:
-                CLASS_ROLES[role_name] = role
+                ROLES[role_name] = role
             else:
                 logger.warning(f"Role not found in guild: {role_name}")
     except Exception as e:
         logger.error(f"Error caching roles: {str(e)}")
 
 
-async def get_discord_user_by_username(username: str) -> Optional[discord.Member]:
+async def get_user(username: str) -> Optional[discord.Member]:
     if not guild or not client or not client.is_ready():
         logger.error("Guild or Client not available")
         return None
-    
     try:
-        # Strip leading @ if present before querying
         query = username.lstrip('@')
-        query_lower = query.lower()
-
-        # Query up to 100 members — searches both username and display name/nickname
+        qlower = query.lower()
         members = await guild.query_members(query=query, limit=100)
-
         if not members:
             logger.warning(f"Discord user not found via query: {username}")
             return None
-
-        # 1. Exact username match (member.name is the unique Discord username, no @)
         for member in members:
-            if member.name.lower() == query_lower:
+            if member.name.lower() == qlower:
                 logger.info(f"Found Discord user by exact username: {query} (ID: {member.id})")
                 return member
-
-        # 2. Only one result returned — use it (frontend will correct stored username if needed)
         if len(members) == 1:
             member = members[0]
             logger.info(f"Found single Discord member via query '{query}': {member.name} (ID: {member.id})")
             return member
-
-        # 3. No exact username match, but exactly one display name (nickname) match
-        display_matches = [m for m in members if m.display_name.lower() == query_lower]
-        if len(display_matches) == 1:
-            member = display_matches[0]
-            logger.info(f"Found Discord user by display name '{query}' → actual username: {member.name} (ID: {member.id})")
+        dmatch = [m for m in members if m.display_name.lower() == qlower]
+        if len(dmatch) == 1:
+            member = dmatch[0]
+            logger.info(f"Found Discord user by display name '{query}' -> actual username: {member.name} (ID: {member.id})")
             return member
-
         logger.warning(f"Discord user not found via query: {username}")
         return None
-    
     except Exception as e:
         logger.error(f"Error querying for Discord user {username}: {str(e)}")
         return None
 
 
-async def get_discord_user_profile(user_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Fetch Discord user profile information with detailed metadata.
-    
-    Args:
-        user_id: Discord user ID
-    
-    Returns:
-        Dictionary with user profile data or None if user not found
-    """
+async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
     if not guild:
         logger.error("Guild not available")
         return None
-    
     if not client or not client.is_ready():
         logger.error("Discord bot not ready")
         return None
-    
     try:
         member = await guild.fetch_member(user_id)
-        
         if not member:
             logger.warning(f"Member not found in guild: {user_id}")
             return None
-        
-        # Get user object for additional details
         user = member
-        
-        # Get avatar URL
-        avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
-        
-        # Get banner URL (account banner, not server banner)
-        banner_url = None
-        accent_color = None
+        avatar = member.avatar.url if member.avatar else member.default_avatar.url
+        banner = None
+        accent = None
         if user.banner:
-            banner_url = user.banner.url
+            banner = user.banner.url
         if user.accent_color:
-            accent_color = str(user.accent_color)
-        
-        # Get avatar decoration if available
-        avatar_decoration = None
+            accent = str(user.accent_color)
+        decoration = None
         if hasattr(user, 'avatar_decoration') and user.avatar_decoration:
-            avatar_decoration = str(user.avatar_decoration)
-        
-        # Get status details
-        desktop_status = None
-        mobile_status = None
-        web_status = None
+            decoration = str(user.avatar_decoration)
+        desktop = None
+        mobile = None
+        web = None
         if hasattr(member, 'desktop_status'):
-            desktop_status = str(member.desktop_status)
+            desktop = str(member.desktop_status)
         if hasattr(member, 'mobile_status'):
-            mobile_status = str(member.mobile_status)
+            mobile = str(member.mobile_status)
         if hasattr(member, 'web_status'):
-            web_status = str(member.web_status)
-        
-        # Get created_at and joined_at
-        created_at = user.created_at.isoformat() if user.created_at else None
-        joined_at = member.joined_at.isoformat() if member.joined_at else None
-        
-        # Get primary guild (if available)
-        primary_guild = None
+            web = str(member.web_status)
+        created = user.created_at.isoformat() if user.created_at else None
+        joined = member.joined_at.isoformat() if member.joined_at else None
+        primary = None
         if hasattr(user, 'primary_guild') and user.primary_guild:
-            primary_guild = str(user.primary_guild)
-        
-        # Get all roles via REST API (no Guild Members intent required)
-        # guild.fetch_member() populates roles from cache which needs the privileged intent,
-        # so we call the endpoint directly and resolve role IDs against guild.roles instead.
+            primary = str(user.primary_guild)
         try:
             member_data = await client.http.request(
-                discord.http.Route(
-                    "GET",
-                    "/guilds/{guild_id}/members/{user_id}",
-                    guild_id=GUILD_ID,
-                    user_id=user_id,
-                )
+                discord.http.Route("GET", "/guilds/{guild_id}/members/{user_id}", guild_id=GUILD, user_id=user_id)
             )
-            role_ids: set[str] = set(member_data.get("roles", []))
+            rids = set(member_data.get("roles", []))
         except Exception as e:
             logger.warning(f"Could not fetch role IDs via REST for {user_id}: {e}")
-            role_ids = set()
-
-        # guild.roles is populated from the guilds intent (non-privileged) — always available
-        guild_role_map: dict[str, str] = {str(r.id): r.name for r in guild.roles}
-
-        all_roles = [
-            guild_role_map[rid]
-            for rid in role_ids
-            if rid in guild_role_map
-        ]
-
-        # Find existing class roles
-        existing_class_role = None
-        for rid in role_ids:
-            role_name_candidate = guild_role_map.get(rid)
-            if role_name_candidate in CLASS_ROLES:
-                existing_class_role = role_name_candidate
+            rids = set()
+        role_map = {str(r.id): r.name for r in guild.roles}
+        role_names = [role_map[rid] for rid in rids if rid in role_map]
+        class_role = None
+        for rid in rids:
+            name = role_map.get(rid)
+            if name in ROLES:
+                class_role = name
                 break
-        
-        # Get raw status
-        raw_status = str(member.status)
-        
-        # Compile profile data
+        status_text = str(member.status)
         profile = {
             "user_id": str(member.id),
             "username": member.name,
             "display_name": member.display_name,
-            "avatar_url": avatar_url,
-            "banner_url": banner_url,
-            "accent_color": accent_color,
-            "avatar_decoration": avatar_decoration,
-            "created_at": created_at,
-            "joined_at": joined_at,
-            "raw_status": raw_status,
-            "desktop_status": desktop_status,
-            "mobile_status": mobile_status,
-            "web_status": web_status,
-            "primary_guild": primary_guild,
-            "roles": all_roles,
-            "existing_class_role": existing_class_role,
+            "avatar_url": avatar,
+            "banner_url": banner,
+            "accent_color": accent,
+            "avatar_decoration": decoration,
+            "created_at": created,
+            "joined_at": joined,
+            "raw_status": status_text,
+            "desktop_status": desktop,
+            "mobile_status": mobile,
+            "web_status": web,
+            "primary_guild": primary,
+            "roles": role_names,
+            "existing_class_role": class_role,
         }
-        
         logger.info(f"Fetched profile for user {user_id}: {member.name}")
         return profile
-    
     except Exception as e:
         logger.error(f"Error fetching user profile {user_id}: {str(e)}")
         return None
 
 
-async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bool = True) -> bool:
-    """
-    Assign a class role to a user. Removes any existing class roles first to ensure only one.
-    
-    Args:
-        user_id: Discord user ID
-        role_name: Name of the role
-        send_welcome_msg: Whether to send a public welcome message in #all-class-chat
-    
-    Returns:
-        True if successful, False otherwise
-    """
+async def assign_role(user_id: int, role_name: str, send_welcome_msg: bool = True) -> bool:
     if not guild:
         logger.error("Guild not available")
         return False
-    
     if not client or not client.is_ready():
         logger.error("Discord bot not ready")
         return False
-    
-    if role_name not in CLASS_ROLES:
+    if role_name not in ROLES:
         logger.error(f"Unknown role: {role_name}")
         return False
-    
     try:
         member = await guild.fetch_member(user_id)
         if not member:
             logger.error(f"Member not found: {user_id}")
             return False
-        
-        role = CLASS_ROLES[role_name]
+        role = ROLES[role_name]
         if not role:
             logger.error(f"Role object not cached: {role_name}")
             return False
-        
-        # Remove any existing class roles from the member
-        roles_to_remove = []
-        for existing_role in member.roles:
-            if existing_role.name in CLASS_ROLES and existing_role.name != role_name:
-                roles_to_remove.append(existing_role)
-        
-        if roles_to_remove:
-            await member.remove_roles(*roles_to_remove, reason="Replacing with new class role - CalVerify")
-            logger.info(f"Removed {len(roles_to_remove)} old class role(s) from user {user_id}")
-        
-        # Check if user already has the target role
+        remove = []
+        for existing in member.roles:
+            if existing.name in ROLES and existing.name != role_name:
+                remove.append(existing)
+        if remove:
+            await member.remove_roles(*remove, reason="Replacing with new class role - CalVerify")
+            logger.info(f"Removed {len(remove)} old class role(s) from user {user_id}")
         if role in member.roles:
             logger.info(f"User {user_id} already has role {role_name}")
             return True
-        
-        # Assign new role
-        # Using discord.Object bypasses the need to search the role list by ID entirely
-        main_role_obj = discord.Object(id=MAIN_ROLE_ID)
-        await member.add_roles(main_role_obj, reason="Verified student on dashboard")
+        main_role = discord.Object(id=MAIN_ROLE)
+        await member.add_roles(main_role, reason="Verified student on dashboard")
         await member.add_roles(role, reason="Verified student on dashboard")
         logger.info(f"Assigned role '{role_name}' to user {user_id}")
-        
-        # Send welcome DM
         try:
             embed = discord.Embed(
                 title="<:bearWave:1105561126164504576> Welcome to the UC Berkeley Discord Server!",
@@ -430,8 +305,6 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
             logger.warning(f"Could not send DM to {user_id} (DMs disabled)")
         except Exception as e:
             logger.error(f"Error sending DM to {user_id}: {str(e)}")
-
-        # Send server welcome message
         if send_welcome_msg:
             try:
                 channel = await client.fetch_channel(1009928284173242448)
@@ -441,43 +314,32 @@ async def assign_role_to_user(user_id: int, role_name: str, send_welcome_msg: bo
                     logger.warning("Could not find #all-class-chat channel (ID 1009928284173242448)")
             except Exception as e:
                 logger.error(f"Error sending welcome message to channel: {str(e)}")
-
         return True
-    
     except Exception as e:
         logger.error(f"Error assigning role to {user_id}: {str(e)}")
         return False
 
+
 async def init_vc_db():
-    """Initialize the SQLite DB for VC consent tracking."""
-    async with aiosqlite.connect(VC_DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS vc_whitelist (
-                user_id INTEGER PRIMARY KEY,
-                agreed_at TEXT NOT NULL
-            )
-        """)
+    async with aiosqlite.connect(VC_DB) as db:
+        await db.execute("CREATE TABLE IF NOT EXISTS vc_whitelist (user_id INTEGER PRIMARY KEY, agreed_at TEXT NOT NULL)")
         await db.commit()
-    logger.info("✓ VC consent DB initialized")
+    logger.info("VC consent DB initialized")
 
 
-async def is_vc_whitelisted(user_id: int) -> bool:
-    """Check if a user has previously agreed to VC rules."""
+async def is_whitelisted(user_id: int) -> bool:
     try:
-        async with aiosqlite.connect(VC_DB_PATH) as db:
-            async with db.execute(
-                "SELECT 1 FROM vc_whitelist WHERE user_id = ?", (user_id,)
-            ) as cursor:
+        async with aiosqlite.connect(VC_DB) as db:
+            async with db.execute("SELECT 1 FROM vc_whitelist WHERE user_id = ?", (user_id,)) as cursor:
                 return await cursor.fetchone() is not None
     except Exception as e:
         logger.error(f"DB error checking whitelist for {user_id}: {e}")
         return False
 
 
-async def add_to_vc_whitelist(user_id: int):
-    """Permanently whitelist a user after they agree to VC rules."""
+async def whitelist_user(user_id: int):
     try:
-        async with aiosqlite.connect(VC_DB_PATH) as db:
+        async with aiosqlite.connect(VC_DB) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO vc_whitelist (user_id, agreed_at) VALUES (?, ?)",
                 (user_id, datetime.now(timezone.utc).isoformat())
@@ -488,68 +350,45 @@ async def add_to_vc_whitelist(user_id: int):
         logger.error(f"DB error whitelisting {user_id}: {e}")
 
 
-class VCRulesView(discord.ui.View):
-    """
-    View with an 'I agree' button for VC rules.
-    - On agree: edits message to confirmed state, whitelists user, stops.
-    - On timeout (5 min): disables button, edits message, replies pinging user, kicks from VC.
-    """
-
+class RulesView(discord.ui.View):
     def __init__(self, member: discord.Member):
-        super().__init__(timeout=300)  # 5 minutes
+        super().__init__(timeout=300)
         self.member = member
-        self.message: Optional[discord.Message] = None  # Set after sending
+        self.message: Optional[discord.Message] = None
         self.agreed = False
 
     @discord.ui.button(label="I agree", style=discord.ButtonStyle.success)
-    async def agree_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        # Only the target member can click
+    async def agree_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.member.id:
-            await interaction.response.send_message(
-                "This prompt is not for you.", ephemeral=True
-            )
+            await interaction.response.send_message("This prompt is not for you.", ephemeral=True)
             return
-
         self.agreed = True
-        await add_to_vc_whitelist(self.member.id)
-
+        await whitelist_user(self.member.id)
         button.disabled = True
-        button.label = "✅  Agreed"
+        button.label = "Agreed"
         button.style = discord.ButtonStyle.secondary
-
-        confirmed_embed = discord.Embed(
-            title="📋 Voice Channel Rules",
-            description=RULES_EMBED_TEXT,
-            color=0x57F287,  # Green
+        done = discord.Embed(
+            title="Voice Channel Rules",
+            description=RULES_TEXT,
+            color=0x57F287,
         ).set_footer(text="Thank you for agreeing to the rules and being responsible in the server!")
-
-        await interaction.response.edit_message(embed=confirmed_embed, view=self)
+        await interaction.response.edit_message(embed=done, view=self)
         self.stop()
         logger.info(f"User {self.member.id} agreed to VC rules")
 
     async def on_timeout(self):
-        """Fires after 5 minutes if user never clicked I Agree."""
         if self.agreed:
-            return  # Already handled, race condition guard
-
-        # Disable the button on the original message
+            return
         for item in self.children:
             item.disabled = True
-
         if self.message:
             try:
-                timed_out_embed = discord.Embed(
-                    title="📋 Voice Channel Rules",
-                    description=RULES_EMBED_TEXT,
-                    color=0xED4245,  # Red
-                ).set_footer(
-                    text="You did not agree to the rules in time and have been kicked from the channel."
-                )
-                await self.message.edit(embed=timed_out_embed, view=self)
-
-                # Reply to the rules message pinging the user
+                timeout_embed = discord.Embed(
+                    title="Voice Channel Rules",
+                    description=RULES_TEXT,
+                    color=0xED4245,
+                ).set_footer(text="You did not agree to the rules in time and have been kicked from the channel.")
+                await self.message.edit(embed=timeout_embed, view=self)
                 await self.message.reply(
                     f"{self.member.mention} You did not agree to the Voice Channel rules within "
                     f"5 minutes and have been kicked from the channel."
@@ -558,17 +397,9 @@ class VCRulesView(discord.ui.View):
                 logger.warning(f"Rules message not found for user {self.member.id} on timeout")
             except Exception as e:
                 logger.error(f"Error editing rules message on timeout for {self.member.id}: {e}")
-
-        # Kick the member from the VC if they're still in it
         try:
-            if (
-                self.member.voice
-                and self.member.voice.channel
-                and self.member.voice.channel.id == RULES_VC_ID
-            ):
-                await self.member.move_to(
-                    None, reason="Did not agree to VC rules within 5 minutes"
-                )
+            if self.member.voice and self.member.voice.channel and self.member.voice.channel.id == VC_ID:
+                await self.member.move_to(None, reason="Did not agree to VC rules within 5 minutes")
                 logger.info(f"Kicked user {self.member.id} from VC for not agreeing to rules")
         except discord.Forbidden:
             logger.error(f"Missing permissions to move member {self.member.id}")
