@@ -387,6 +387,64 @@
             .manage-sheet-input-group input { padding: 8px; font-size: 11px; }
             .manage-sheet-button { margin-top: 8px; font-size: 11px; }
         }
+
+        /* Keybind system */
+        .auto-advance-badge {
+            display: none; position: absolute; top: 12px; left: 12px;
+            padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+            background: #2c3e50; color: white; align-items: center; gap: 4px;
+        }
+        .auto-advance-badge i { font-size: 10px; }
+
+        .keybinds-help-overlay {
+            display: none; position: fixed; inset: 0; z-index: 10000;
+            background: rgba(0,0,0,0.6); justify-content: center; align-items: center;
+        }
+        .keybinds-help-overlay.active { display: flex; }
+        .keybinds-help-content {
+            background: white; border-radius: 12px; padding: 30px; max-width: 420px;
+            width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2); max-height: 80vh; overflow-y: auto;
+        }
+        .keybinds-help-content h2 { margin: 0 0 4px 0; font-size: 20px; font-weight: 700; color: #333; }
+        .keybinds-help-content p { margin: 0 0 16px 0; color: #666; font-size: 14px; }
+        .keybinds-help-list { display: flex; flex-direction: column; gap: 6px; }
+        .keybinds-help-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 12px; background: #f8f8f8; border-radius: 6px;
+        }
+        .keybinds-help-label { font-size: 14px; color: #333; }
+        kbd.keybinds-help-key {
+            background: #2c3e50; color: white; padding: 4px 10px; border-radius: 4px;
+            font-size: 12px; font-weight: 600; font-family: inherit; min-width: 28px;
+            text-align: center;
+        }
+        .keybinds-help-footer {
+            margin-top: 16px; text-align: center; color: #999; font-size: 13px;
+        }
+        .keybinds-help-footer kbd {
+            background: #e0e0e0; padding: 2px 8px; border-radius: 3px;
+            font-size: 12px; font-family: inherit; color: #333;
+        }
+
+        .keybind-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 12px; border-bottom: 1px solid #eee;
+        }
+        .keybind-item:last-child { border-bottom: none; }
+        .keybind-label { font-size: 14px; color: #333; }
+        .keybind-key {
+            background: #f0f0f0; padding: 6px 14px; border-radius: 4px;
+            font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+            border: 2px solid transparent; min-width: 40px; text-align: center;
+            font-family: inherit;
+        }
+        .keybind-key:hover { background: #e0e0e0; border-color: #bbb; }
+        .keybind-key.listening {
+            background: #fff3cd; border-color: #ffc107; animation: pulse-bg 0.6s ease-in-out infinite alternate;
+        }
+        @keyframes pulse-bg {
+            from { background: #fff3cd; } to { background: #ffe69c; }
+        }
     </style>
 </head>
 <body>
@@ -405,6 +463,7 @@
                 <p style="margin: 0; color: #666;">
                     Search across all data internally |
                     <a style="text-decoration: underline; cursor: pointer; margin-right: 5px;" id="rolesBtn">Role Management</a> |
+                    <a style="text-decoration: underline; cursor: pointer; margin-right: 5px;" id="keybindsBtn">Keybinds</a> |
                     <a style="text-decoration: underline; cursor: pointer;" id="logoutBtn">Logout</a>
                 </p>
             </div>
@@ -426,6 +485,7 @@
 
                     <div id="entryNavigation" style="display: none; background: #f0f0f0; padding: 20px; border-radius: 8px; margin-bottom: 25px; border: 4px solid #e0e0e0; position: relative;">
                         <div id="statusPill" style="position: absolute; top: 12px; right: 12px; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; background: #e0e0e0; color: #666;"></div>
+                        <div id="autoAdvanceBadge" class="auto-advance-badge"><i class="fas fa-forward"></i> Auto</div>
 
                         <div class="entry-main-nav" style="margin: 35px 0 0 0;">
                             <button type="button" id="prevUnverifiedBtn" data-bs-toggle="tooltip" data-bs-placement="top" title="Jump to previous unverified student"><i class="fas fa-chevron-left"></i><i class="fas fa-chevron-left"></i></button>
@@ -680,6 +740,32 @@
                             <i class="fas fa-link"></i> Link Sheet
                         </button>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="keybinds-help-overlay" id="keybindsHelpOverlay">
+            <div class="keybinds-help-content">
+                <h2>Keyboard Shortcuts</h2>
+                <p>Press a key to perform the action</p>
+                <div class="keybinds-help-list" id="keybindsHelpList"></div>
+                <div class="keybinds-help-footer">Press <kbd>?</kbd> or <kbd>Esc</kbd> to close &middot; <a href="#" id="helpCustomizeLink" style="color: #2c3e50;">Customize</a></div>
+            </div>
+        </div>
+
+        <div class="verify-modal-backdrop" id="keybindsModalBackdrop"></div>
+        <div class="verify-modal" id="keybindsModal" style="max-width: 500px;">
+            <div class="verify-modal-content">
+                <button class="verify-modal-close" id="keybindsModalClose">&times;</button>
+                <div class="verify-modal-header">
+                    <h2>Customize Keybinds</h2>
+                    <p>Click a keybinding to change it, then press the new key</p>
+                </div>
+                <div class="verify-modal-body" style="padding: 25px 30px;">
+                    <div id="keybindsList"></div>
+                    <button id="resetKeybindsBtn" class="verify-btn verify-btn-secondary" style="margin-top: 15px; width: 100%;">
+                        <i class="fas fa-undo"></i> Reset to Defaults
+                    </button>
                 </div>
             </div>
         </div>
@@ -1011,12 +1097,18 @@
             if (entries[entryIdx]) openModal(entries[entryIdx]);
         });
 
-        btnNotFound.addEventListener('click', () => {
-            if (entries[entryIdx]) setColor(entries[entryIdx].row_index, '#fff2cc');
+        btnNotFound.addEventListener('click', async () => {
+            if (entries[entryIdx]) {
+                await setColor(entries[entryIdx].row_index, '#fff2cc');
+                maybeAutoAdvance();
+            }
         });
 
-        btnBanned.addEventListener('click', () => {
-            if (entries[entryIdx]) setColor(entries[entryIdx].row_index, '#f4cccc');
+        btnBanned.addEventListener('click', async () => {
+            if (entries[entryIdx]) {
+                await setColor(entries[entryIdx].row_index, '#f4cccc');
+                maybeAutoAdvance();
+            }
         });
 
         btnNotes.addEventListener('click', () => { editNotes(); });
@@ -1195,7 +1287,7 @@
                     body: JSON.stringify({row_index: rowIndex, color_hex: hex})
                 });
                 if (!res.ok) {
-                    if (res.status === 401) { onUnauthorized(); return; }
+                    if (res.status === 401) { onUnauthorized(); return false; }
                     const data = await res.json();
                     throw new Error(data.detail || 'Failed to update color');
                 }
@@ -1205,9 +1297,11 @@
                     if (idx === entryIdx) showEntry();
                 }
                 toast('Color updated successfully', 'success');
+                return true;
             } catch (err) {
                 toast(`Error: ${err.message}`, 'error');
                 console.error('Error updating color:', err);
+                return false;
             } finally {
                 btns.forEach(b => b.classList.remove('loading'));
             }
@@ -1251,6 +1345,20 @@
             roleError.classList.remove('active');
             roleError.textContent = '';
             assigning = false;
+
+            const gc = (entry.graduating_class || '').toLowerCase();
+            const yearMatch = gc.match(/\b(20\d{2})\b/);
+            if (yearMatch) {
+                const year = yearMatch[1];
+                const isTransfer = gc.includes('transfer');
+                const roleName = isTransfer ? `Transfer Class of ${year}` : `Class of ${year}`;
+                const option = Array.from(roleDropdown.options).find(o => o.value === roleName);
+                if (option) {
+                    roleDropdown.value = roleName;
+                    confirmBtn.disabled = false;
+                }
+            }
+
             verifyModal.classList.add('active');
             modalBackdrop.classList.add('active');
             profileLoading.style.display = 'flex';
@@ -1537,6 +1645,7 @@
                 await setColor(ridx, '#D9EAD3');
                 await setDiscordId(ridx, String(uid));
                 toast(`Student verified with role '${role}'!`, 'success');
+                maybeAutoAdvance();
             } catch (err) {
                 console.error('Error during verification:', err);
                 roleError.textContent = 'Error: ' + err.message;
@@ -1559,6 +1668,7 @@
             await setColor(ridx, '#D9EAD3');
             if (profile && profile.user_id) await setDiscordId(ridx, String(profile.user_id));
             toast('Student verified!', 'success');
+            maybeAutoAdvance();
         });
 
         async function setDiscordUser(rowIndex, val) {
@@ -1875,6 +1985,250 @@
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && rolesModal.classList.contains('active')) closeRoles();
         });
+
+        // ===== KEYBIND SYSTEM =====
+        const DEFAULT_KEYBINDS = {
+            nextEntry: 'ArrowDown',
+            prevEntry: 'ArrowUp',
+            prevUnverified: 'ArrowLeft',
+            nextUnverified: 'ArrowRight',
+            openModal: 'v',
+            editNotes: 'n',
+            toggleAutoAdvance: 'a',
+            showHelp: '/'
+        };
+
+        let keybinds = loadKeybinds();
+        let autoAdvanceEnabled = localStorage.getItem('calverify_auto_advance') === 'true';
+
+        const ACTION_LABELS = {
+            nextEntry: 'Next Entry',
+            prevEntry: 'Previous Entry',
+            prevUnverified: 'Previous Unverified Entry',
+            nextUnverified: 'Next Unverified Entry',
+            openModal: 'Open Verify Modal',
+            editNotes: 'Edit Notes',
+            toggleAutoAdvance: 'Toggle Auto-Advance',
+            showHelp: 'Show Keyboard Shortcuts'
+        };
+
+        function loadKeybinds() {
+            try {
+                const saved = localStorage.getItem('calverify_keybinds');
+                if (saved) return { ...DEFAULT_KEYBINDS, ...JSON.parse(saved) };
+            } catch (e) {}
+            return { ...DEFAULT_KEYBINDS };
+        }
+
+        function saveKeybinds() {
+            localStorage.setItem('calverify_keybinds', JSON.stringify(keybinds));
+        }
+
+        function formatKey(key) {
+            const map = {
+                'ArrowUp': '\u2191', 'ArrowDown': '\u2193', 'ArrowLeft': '\u2190', 'ArrowRight': '\u2192',
+                'Escape': 'Esc', 'Enter': 'Enter', ' ': 'Space'
+            };
+            return map[key] || key.toUpperCase();
+        }
+
+        function toggleAutoAdvance() {
+            autoAdvanceEnabled = !autoAdvanceEnabled;
+            localStorage.setItem('calverify_auto_advance', autoAdvanceEnabled ? 'true' : 'false');
+            updateAutoAdvanceUI();
+            toast('Auto-advance ' + (autoAdvanceEnabled ? 'enabled' : 'disabled'), 'info');
+        }
+
+        function updateAutoAdvanceUI() {
+            const badge = document.getElementById('autoAdvanceBadge');
+            if (badge) badge.style.display = autoAdvanceEnabled ? 'inline-flex' : 'none';
+        }
+
+        function goToNextUnverified() {
+            for (let i = entryIdx + 1; i < entries.length; i++) {
+                if (!entries[i].background_color) { entryIdx = i; showEntry(); return; }
+            }
+            for (let i = 0; i < entryIdx; i++) {
+                if (!entries[i].background_color) { entryIdx = i; showEntry(); return; }
+            }
+            toast('No more unverified entries', 'info');
+        }
+
+        function maybeAutoAdvance() {
+            if (autoAdvanceEnabled) goToNextUnverified();
+        }
+
+        function goToNextEntry() {
+            if (entryIdx < entries.length - 1) { entryIdx++; showEntry(); }
+        }
+
+        function goToPrevEntry() {
+            if (entryIdx > 0) { entryIdx--; showEntry(); }
+        }
+
+        function toggleHelp() {
+            const overlay = document.getElementById('keybindsHelpOverlay');
+            if (overlay.style.display === 'flex') {
+                overlay.style.display = 'none';
+            } else {
+                renderHelpShortcuts();
+                overlay.style.display = 'flex';
+            }
+        }
+
+        function renderHelpShortcuts() {
+            const list = document.getElementById('keybindsHelpList');
+            list.innerHTML = '';
+            Object.entries(ACTION_LABELS).forEach(function(_ref) {
+                var action = _ref[0], label = _ref[1];
+                var key = keybinds[action];
+                var item = document.createElement('div');
+                item.className = 'keybinds-help-item';
+                item.innerHTML = '<span class="keybinds-help-label">' + label + '</span><kbd class="keybinds-help-key">' + formatKey(key) + '</kbd>';
+                list.appendChild(item);
+            });
+        }
+
+        function openKeybindsModal() {
+            document.getElementById('keybindsModal').classList.add('active');
+            document.getElementById('keybindsModalBackdrop').classList.add('active');
+            renderKeybindsList();
+            listeningForBind = null;
+        }
+
+        function closeKeybindsModal() {
+            document.getElementById('keybindsModal').classList.remove('active');
+            document.getElementById('keybindsModalBackdrop').classList.remove('active');
+            listeningForBind = null;
+        }
+
+        var listeningForBind = null;
+
+        function renderKeybindsList() {
+            var list = document.getElementById('keybindsList');
+            list.innerHTML = '';
+            Object.entries(ACTION_LABELS).forEach(function(_ref2) {
+                var action = _ref2[0], label = _ref2[1];
+                var key = keybinds[action];
+                var item = document.createElement('div');
+                item.className = 'keybind-item';
+                item.innerHTML = '<span class="keybind-label">' + label + '</span>';
+                var keyEl = document.createElement('span');
+                keyEl.className = 'keybind-key';
+                keyEl.dataset.action = action;
+                keyEl.textContent = formatKey(key);
+                keyEl.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    startListening(action, keyEl);
+                });
+                item.appendChild(keyEl);
+                list.appendChild(item);
+            });
+        }
+
+        function startListening(action, el) {
+            listeningForBind = action;
+            document.querySelectorAll('.keybind-key').forEach(function(k) { k.classList.remove('listening'); });
+            el.classList.add('listening');
+            el.textContent = '...';
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if (document.getElementById('keybindsModal').classList.contains('active') && listeningForBind) {
+                e.preventDefault();
+                e.stopPropagation();
+                var action = listeningForBind;
+                if (e.key === 'Escape') {
+                    listeningForBind = null;
+                    document.querySelectorAll('.keybind-key').forEach(function(k) { k.classList.remove('listening'); });
+                    renderKeybindsList();
+                    return;
+                }
+                keybinds[action] = e.key;
+                saveKeybinds();
+                listeningForBind = null;
+                document.querySelectorAll('.keybind-key').forEach(function(k) { k.classList.remove('listening'); });
+                renderKeybindsList();
+                toast('Keybind updated: ' + ACTION_LABELS[action] + ' \u2192 ' + formatKey(e.key), 'success');
+                return;
+            }
+
+            if (verifyModal.classList.contains('active') && e.key === 'Enter') {
+                if (!confirmBtn.disabled) {
+                    e.preventDefault();
+                    confirmBtn.click();
+                }
+                return;
+            }
+
+            var tag = document.activeElement ? document.activeElement.tagName : '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+            if (document.getElementById('keybindsHelpOverlay').style.display === 'flex') {
+                if (e.key === 'Escape') {
+                    document.getElementById('keybindsHelpOverlay').style.display = 'none';
+                    e.preventDefault();
+                    return;
+                }
+                var helpKey = e.key === '?' ? '/' : e.key;
+                if (helpKey === keybinds.showHelp) {
+                    toggleHelp();
+                    e.preventDefault();
+                }
+                return;
+            }
+
+            if (e.key === 'Escape') {
+                if (document.getElementById('keybindsModal').classList.contains('active')) {
+                    closeKeybindsModal();
+                    e.preventDefault();
+                }
+                return;
+            }
+
+            var pressedKey = e.key === '?' ? '/' : e.key;
+            var action = null;
+            for (var a in keybinds) {
+                if (keybinds[a] === pressedKey || keybinds[a].toLowerCase() === pressedKey.toLowerCase()) {
+                    action = a;
+                    break;
+                }
+            }
+            if (!action) return;
+            e.preventDefault();
+            switch (action) {
+                case 'nextEntry': goToNextEntry(); break;
+                case 'prevEntry': goToPrevEntry(); break;
+                case 'prevUnverified':
+                    for (var i = entryIdx - 1; i >= 0; i--) { if (!entries[i].background_color) { entryIdx = i; showEntry(); return; } }
+                    for (var i$1 = entries.length - 1; i$1 > entryIdx; i$1--) { if (!entries[i$1].background_color) { entryIdx = i$1; showEntry(); return; } }
+                    break;
+                case 'nextUnverified': goToNextUnverified(); break;
+                case 'openModal':
+                    if (entries[entryIdx]) openModal(entries[entryIdx]);
+                    break;
+                case 'editNotes': editNotes(); break;
+                case 'toggleAutoAdvance': toggleAutoAdvance(); break;
+                case 'showHelp': toggleHelp(); break;
+            }
+        });
+
+        document.getElementById('keybindsBtn').addEventListener('click', openKeybindsModal);
+        document.getElementById('keybindsModalClose').addEventListener('click', closeKeybindsModal);
+        document.getElementById('keybindsModalBackdrop').addEventListener('click', closeKeybindsModal);
+        document.getElementById('resetKeybindsBtn').addEventListener('click', function() {
+            keybinds = { ...DEFAULT_KEYBINDS };
+            saveKeybinds();
+            renderKeybindsList();
+            toast('Keybinds reset to defaults', 'success');
+        });
+        document.getElementById('helpCustomizeLink').addEventListener('click', function(e) {
+            e.preventDefault();
+            document.getElementById('keybindsHelpOverlay').style.display = 'none';
+            openKeybindsModal();
+        });
+
+        updateAutoAdvanceUI();
     </script>
 </body>
 </html>
