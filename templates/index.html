@@ -745,28 +745,14 @@
         </div>
 
         <div class="keybinds-help-overlay" id="keybindsHelpOverlay">
-            <div class="keybinds-help-content">
+            <div class="keybinds-help-content" id="keybindsHelpContent">
                 <h2>Keyboard Shortcuts</h2>
-                <p>Press a key to perform the action</p>
+                <p>Click a keybinding to change it, then press the new key</p>
                 <div class="keybinds-help-list" id="keybindsHelpList"></div>
-                <div class="keybinds-help-footer">Press <kbd>?</kbd> or <kbd>Esc</kbd> to close &middot; <a href="#" id="helpCustomizeLink" style="color: #2c3e50;">Customize</a></div>
-            </div>
-        </div>
-
-        <div class="verify-modal-backdrop" id="keybindsModalBackdrop"></div>
-        <div class="verify-modal" id="keybindsModal" style="max-width: 500px;">
-            <div class="verify-modal-content">
-                <button class="verify-modal-close" id="keybindsModalClose">&times;</button>
-                <div class="verify-modal-header">
-                    <h2>Customize Keybinds</h2>
-                    <p>Click a keybinding to change it, then press the new key</p>
-                </div>
-                <div class="verify-modal-body" style="padding: 25px 30px;">
-                    <div id="keybindsList"></div>
-                    <button id="resetKeybindsBtn" class="verify-btn verify-btn-secondary" style="margin-top: 15px; width: 100%;">
-                        <i class="fas fa-undo"></i> Reset to Defaults
-                    </button>
-                </div>
+                <button id="resetKeybindsBtn" class="verify-btn verify-btn-secondary" style="margin-top: 15px; width: 100%;">
+                    <i class="fas fa-undo"></i> Reset to Defaults
+                </button>
+                <div class="keybinds-help-footer">Press <kbd>/</kbd> or <kbd>Esc</kbd> to close</div>
             </div>
         </div>
 
@@ -902,7 +888,6 @@
         function showSearch() {
             loginSection.style.display = 'none';
             searchSection.style.display = 'block';
-            searchInput.focus();
         }
 
         function showLoginError(msg) {
@@ -1999,7 +1984,7 @@
         };
 
         let keybinds = loadKeybinds();
-        let autoAdvanceEnabled = localStorage.getItem('calverify_auto_advance') === 'true';
+        let autoAdvanceEnabled = localStorage.getItem('calverify_auto_advance') !== 'false';
 
         const ACTION_LABELS = {
             nextEntry: 'Next Entry',
@@ -2077,38 +2062,10 @@
         }
 
         function renderHelpShortcuts() {
-            const list = document.getElementById('keybindsHelpList');
+            var list = document.getElementById('keybindsHelpList');
             list.innerHTML = '';
             Object.entries(ACTION_LABELS).forEach(function(_ref) {
                 var action = _ref[0], label = _ref[1];
-                var key = keybinds[action];
-                var item = document.createElement('div');
-                item.className = 'keybinds-help-item';
-                item.innerHTML = '<span class="keybinds-help-label">' + label + '</span><kbd class="keybinds-help-key">' + formatKey(key) + '</kbd>';
-                list.appendChild(item);
-            });
-        }
-
-        function openKeybindsModal() {
-            document.getElementById('keybindsModal').classList.add('active');
-            document.getElementById('keybindsModalBackdrop').classList.add('active');
-            renderKeybindsList();
-            listeningForBind = null;
-        }
-
-        function closeKeybindsModal() {
-            document.getElementById('keybindsModal').classList.remove('active');
-            document.getElementById('keybindsModalBackdrop').classList.remove('active');
-            listeningForBind = null;
-        }
-
-        var listeningForBind = null;
-
-        function renderKeybindsList() {
-            var list = document.getElementById('keybindsList');
-            list.innerHTML = '';
-            Object.entries(ACTION_LABELS).forEach(function(_ref2) {
-                var action = _ref2[0], label = _ref2[1];
                 var key = keybinds[action];
                 var item = document.createElement('div');
                 item.className = 'keybind-item';
@@ -2126,6 +2083,8 @@
             });
         }
 
+        var listeningForBind = null;
+
         function startListening(action, el) {
             listeningForBind = action;
             document.querySelectorAll('.keybind-key').forEach(function(k) { k.classList.remove('listening'); });
@@ -2134,21 +2093,22 @@
         }
 
         document.addEventListener('keydown', function(e) {
-            if (document.getElementById('keybindsModal').classList.contains('active') && listeningForBind) {
+            var helpOverlay = document.getElementById('keybindsHelpOverlay');
+            if (helpOverlay.style.display === 'flex' && listeningForBind) {
                 e.preventDefault();
                 e.stopPropagation();
                 var action = listeningForBind;
                 if (e.key === 'Escape') {
                     listeningForBind = null;
                     document.querySelectorAll('.keybind-key').forEach(function(k) { k.classList.remove('listening'); });
-                    renderKeybindsList();
+                    renderHelpShortcuts();
                     return;
                 }
                 keybinds[action] = e.key;
                 saveKeybinds();
                 listeningForBind = null;
                 document.querySelectorAll('.keybind-key').forEach(function(k) { k.classList.remove('listening'); });
-                renderKeybindsList();
+                renderHelpShortcuts();
                 toast('Keybind updated: ' + ACTION_LABELS[action] + ' \u2192 ' + formatKey(e.key), 'success');
                 return;
             }
@@ -2164,23 +2124,16 @@
             var tag = document.activeElement ? document.activeElement.tagName : '';
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-            if (document.getElementById('keybindsHelpOverlay').style.display === 'flex') {
+            if (helpOverlay.style.display === 'flex') {
                 if (e.key === 'Escape') {
-                    document.getElementById('keybindsHelpOverlay').style.display = 'none';
+                    helpOverlay.style.display = 'none';
+                    listeningForBind = null;
                     e.preventDefault();
                     return;
                 }
-                var helpKey = e.key === '?' ? '/' : e.key;
-                if (helpKey === keybinds.showHelp) {
-                    toggleHelp();
-                    e.preventDefault();
-                }
-                return;
-            }
-
-            if (e.key === 'Escape') {
-                if (document.getElementById('keybindsModal').classList.contains('active')) {
-                    closeKeybindsModal();
+                if (e.key === '/' || e.key === '?') {
+                    helpOverlay.style.display = 'none';
+                    listeningForBind = null;
                     e.preventDefault();
                 }
                 return;
@@ -2213,19 +2166,18 @@
             }
         });
 
-        document.getElementById('keybindsBtn').addEventListener('click', openKeybindsModal);
-        document.getElementById('keybindsModalClose').addEventListener('click', closeKeybindsModal);
-        document.getElementById('keybindsModalBackdrop').addEventListener('click', closeKeybindsModal);
+        document.getElementById('keybindsBtn').addEventListener('click', toggleHelp);
+        document.getElementById('keybindsHelpOverlay').addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.style.display = 'none';
+                listeningForBind = null;
+            }
+        });
         document.getElementById('resetKeybindsBtn').addEventListener('click', function() {
             keybinds = { ...DEFAULT_KEYBINDS };
             saveKeybinds();
-            renderKeybindsList();
+            renderHelpShortcuts();
             toast('Keybinds reset to defaults', 'success');
-        });
-        document.getElementById('helpCustomizeLink').addEventListener('click', function(e) {
-            e.preventDefault();
-            document.getElementById('keybindsHelpOverlay').style.display = 'none';
-            openKeybindsModal();
         });
 
         updateAutoAdvanceUI();
