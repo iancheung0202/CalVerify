@@ -86,7 +86,7 @@ async def init_bot():
             days: app_commands.Range[int, 1, 365] = 90,
             tz: str = "America/Los_Angeles",
         ):
-            await interaction.response.send("Generating activity stats, please wait...", ephemeral=True)
+            await interaction.response.send_message("Generating activity stats, please wait...", ephemeral=True)
             stats = await get_message_activity(days=days, tz_name=tz)
             if not stats:
                 await interaction.followup.send(
