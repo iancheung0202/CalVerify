@@ -75,7 +75,7 @@ async def init_bot():
         client = discord.Client(intents=intents)
         tree = app_commands.CommandTree(client)
 
-        @tree.command(name="activity", description="Show message activity stats for this server")
+        @tree.command(name="activity", description="Show message activity stats for this server", guild=discord.Object(id=GUILD))
         @app_commands.describe(
             days="How many days back to analyze (default 90, max 365)",
             tz="IANA timezone for local time buckets, e.g. America/Los_Angeles (default)",
