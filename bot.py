@@ -2,14 +2,26 @@ import discord
 import logging
 import os
 import asyncio
+import json
+import io
 import aiosqlite
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+import matplotlib
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any, List
+from zoneinfo import ZoneInfo
+from discord import app_commands
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+matplotlib.use("Agg")
+
+client: Optional[discord.Client] = None
+guild: Optional[discord.Guild] = None
+tree: Optional[app_commands.CommandTree] = None
+bot_task = None
 
 TOKEN = os.getenv("BOT_TOKEN")
 GUILD = int(os.getenv("DISCORD_GUILD_ID", "0"))
@@ -45,13 +57,8 @@ RULES_TEXT = (
     "- Video, streaming, and soundboard are currently disabled and may be enabled in the future if the channel is proven to be a safe and responsible space."
 )
 
-client: Optional[discord.Client] = None
-guild: Optional[discord.Guild] = None
-bot_task = None
-
-
 async def init_bot():
-    global client, bot_task
+    global client, tree, bot_task
     if not TOKEN:
         logger.error("BOT_TOKEN not found in .env - Discord bot will not start")
         return False
@@ -66,6 +73,66 @@ async def init_bot():
         intents.voice_states = True
         intents.guilds = True
         client = discord.Client(intents=intents)
+        tree = app_commands.CommandTree(client)
+
+        @tree.command(name="activity", description="Show message activity stats for this server")
+        @app_commands.describe(
+            days="How many days back to analyze (default 90, max 365)",
+            tz="IANA timezone for local time buckets, e.g. America/Los_Angeles (default)",
+        )
+        @app_commands.default_permissions(manage_guild=True)
+        async def activity(
+            interaction: discord.Interaction,
+            days: app_commands.Range[int, 1, 365] = 90,
+            tz: str = "America/Los_Angeles",
+        ):
+            await interaction.response.defer(thinking=True)
+            stats = await get_message_activity(days=days, tz_name=tz)
+            if not stats:
+                await interaction.followup.send(
+                    "Couldn't generate activity stats — the bot may not be fully ready. Check the logs.",
+                    ephemeral=True,
+                )
+                return
+            embed = build_activity_embed(stats)
+
+            hour_buf, weekday_buf = await asyncio.gather(
+                asyncio.to_thread(
+                    render_hour_histogram,
+                    stats["hour_of_day"]["counts_by_hour"],
+                    stats["hour_of_day"]["peak_hour"],
+                ),
+                asyncio.to_thread(
+                    render_weekday_histogram,
+                    stats["day_of_week"]["counts"],
+                    stats["day_of_week"]["peak_day"],
+                ),
+            )
+            hour_file = discord.File(hour_buf, filename="messages_by_hour.png")
+            weekday_file = discord.File(weekday_buf, filename="messages_by_weekday.png")
+
+            hour_embed = discord.Embed(color=0xFDB515).set_image(url="attachment://messages_by_hour.png")
+            weekday_embed = discord.Embed(color=0xFDB515).set_image(url="attachment://messages_by_weekday.png")
+
+            json_bytes = json.dumps(stats, indent=2).encode("utf-8")
+            json_file = discord.File(io.BytesIO(json_bytes), filename=f"activity_{stats['timeframe_days']}d.json")
+
+            await interaction.followup.send(
+                embeds=[embed, hour_embed, weekday_embed],
+                files=[hour_file, weekday_file, json_file],
+            )
+
+        @activity.error
+        async def activity_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+            logger.error(f"Error in /activity: {error}", exc_info=True)
+            if isinstance(error, app_commands.MissingPermissions):
+                message = "You need the **Manage Server** permission to run this."
+            else:
+                message = "Something went wrong generating activity stats."
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
 
         @client.event
         async def on_ready():
@@ -75,6 +142,11 @@ async def init_bot():
             if guild:
                 logger.info(f"Connected to guild: {guild.name} ({guild.id})")
                 await cache_roles()
+                try:
+                    synced = await tree.sync(guild=discord.Object(id=GUILD))
+                    logger.info(f"Synced {len(synced)} slash command(s) to guild {GUILD}")
+                except Exception as e:
+                    logger.error(f"Error syncing slash commands: {e}")
             else:
                 logger.warning(f"Guild {GUILD} not found.")
             await init_vc_db()
@@ -238,6 +310,299 @@ async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching user profile {user_id}: {str(e)}")
         return None
+
+
+async def get_message_activity(days: int = 90, tz_name: str = "America/Los_Angeles") -> Optional[Dict[str, Any]]:
+    if not guild:
+        logger.error("Guild not available")
+        return None
+    if not client or not client.is_ready():
+        logger.error("Discord bot not ready")
+        return None
+    if days <= 0:
+        logger.error(f"Invalid days value for message activity stats: {days}")
+        return None
+
+    DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        logger.warning(f"Unknown timezone '{tz_name}', falling back to UTC")
+        tz_name = "UTC"
+        tz = timezone.utc
+
+    now = datetime.now(timezone.utc)
+    after = now - timedelta(days=days)
+
+    hour_counts = [0] * 24
+    weekday_counts = [0] * 7
+    heatmap = [[0] * 24 for _ in range(7)]  # heatmap[weekday][hour], Monday=0..Sunday=6
+    daily_counts: Dict[str, int] = {}
+    channel_counts: Dict[str, int] = {}
+    author_counts: Dict[int, int] = {}
+    author_names: Dict[int, str] = {}
+
+    total_messages = 0
+    skipped_non_member = 0
+    channels_scanned = 0
+    channels_skipped_no_perms = []
+    channels_failed = []
+
+    channels_to_scan = list(guild.text_channels) + list(guild.threads)
+    me = guild.me
+
+    for channel in channels_to_scan:
+        if me:
+            perms = channel.permissions_for(me)
+            if not perms.view_channel or not perms.read_message_history:
+                channels_skipped_no_perms.append(channel.name)
+                continue
+        channel_total = 0
+        try:
+            channels_scanned += 1
+            async for message in channel.history(after=after, limit=None):
+                if message.author.bot or message.webhook_id is not None:
+                    skipped_non_member += 1
+                    continue
+                if message.type not in {discord.MessageType.default, discord.MessageType.reply}:
+                    skipped_non_member += 1
+                    continue
+
+                local_dt = message.created_at.astimezone(tz)
+                hour = local_dt.hour
+                weekday = local_dt.weekday()
+                date_key = local_dt.strftime("%Y-%m-%d")
+
+                hour_counts[hour] += 1
+                weekday_counts[weekday] += 1
+                heatmap[weekday][hour] += 1
+                daily_counts[date_key] = daily_counts.get(date_key, 0) + 1
+                author_counts[message.author.id] = author_counts.get(message.author.id, 0) + 1
+                author_names[message.author.id] = str(message.author)
+
+                channel_total += 1
+                total_messages += 1
+            if channel_total:
+                channel_counts[channel.name] = channel_total
+        except discord.Forbidden:
+            channels_failed.append(channel.name)
+            logger.warning(f"No permission to read history in #{channel.name}")
+        except Exception as e:
+            channels_failed.append(channel.name)
+            logger.error(f"Error fetching history for #{channel.name}: {str(e)}")
+
+    day_occurrences = [0] * 7
+    cursor = after.astimezone(tz).date()
+    end_date = now.astimezone(tz).date()
+    while cursor <= end_date:
+        day_occurrences[cursor.weekday()] += 1
+        cursor += timedelta(days=1)
+    total_days_in_range = sum(day_occurrences) or 1
+
+    def _safe_div(n, d):
+        return round(n / d, 2) if d else 0.0
+
+    peak_hour = max(range(24), key=lambda h: hour_counts[h]) if total_messages else None
+    quietest_hour = min(range(24), key=lambda h: hour_counts[h]) if total_messages else None
+    peak_weekday_idx = max(range(7), key=lambda d: weekday_counts[d]) if total_messages else None
+    quietest_weekday_idx = min(range(7), key=lambda d: weekday_counts[d]) if total_messages else None
+
+    peak_cell = None
+    if total_messages:
+        best_day, best_hour, best_count = 0, 0, -1
+        for d in range(7):
+            for h in range(24):
+                if heatmap[d][h] > best_count:
+                    best_day, best_hour, best_count = d, h, heatmap[d][h]
+        peak_cell = {"day": DAYS[best_day], "hour": best_hour, "count": best_count}
+
+    weekday_total = sum(weekday_counts[0:5])
+    weekend_total = sum(weekday_counts[5:7])
+    weekday_calendar_days = sum(day_occurrences[0:5])
+    weekend_calendar_days = sum(day_occurrences[5:7])
+
+    busiest_dates = sorted(daily_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    quietest_active_dates = sorted(daily_counts.items(), key=lambda kv: kv[1])[:5]
+    top_members = sorted(author_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+
+    result = {
+        "timeframe_days": days,
+        "timezone": tz_name,
+        "range_start_utc": after.isoformat(),
+        "range_end_utc": now.isoformat(),
+        "generated_at_utc": now.isoformat(),
+        "total_messages": total_messages,
+        "non_member_messages_excluded": skipped_non_member,
+        "unique_active_members": len(author_counts),
+        "channels_scanned": channels_scanned,
+        "channels_skipped_no_permission": channels_skipped_no_perms,
+        "channels_failed": channels_failed,
+        "hour_of_day": {
+            "counts_by_hour": hour_counts,
+            "peak_hour": peak_hour,
+            "quietest_hour": quietest_hour,
+        },
+        "day_of_week": {
+            "counts": {DAYS[i]: weekday_counts[i] for i in range(7)},
+            "avg_messages_per_occurrence": {DAYS[i]: _safe_div(weekday_counts[i], day_occurrences[i]) for i in range(7)},
+            "peak_day": DAYS[peak_weekday_idx] if peak_weekday_idx is not None else None,
+            "quietest_day": DAYS[quietest_weekday_idx] if quietest_weekday_idx is not None else None,
+            "weekday_total": weekday_total,
+            "weekend_total": weekend_total,
+            "weekday_avg_per_day": _safe_div(weekday_total, weekday_calendar_days),
+            "weekend_avg_per_day": _safe_div(weekend_total, weekend_calendar_days),
+        },
+        "heatmap_day_by_hour": {
+            "description": "matrix[day_index][hour] = message count; day_index 0=Monday..6=Sunday, hour is 0-23 local time",
+            "matrix": heatmap,
+            "day_labels": DAYS,
+            "peak_cell": peak_cell,
+        },
+        "daily_trend": {
+            "counts_by_date": dict(sorted(daily_counts.items())),
+            "avg_messages_per_day": _safe_div(total_messages, total_days_in_range),
+            "busiest_dates": [{"date": d, "count": c} for d, c in busiest_dates],
+            "quietest_active_dates": [{"date": d, "count": c} for d, c in quietest_active_dates],
+        },
+        "channel_breakdown": dict(sorted(channel_counts.items(), key=lambda kv: kv[1], reverse=True)),
+        "top_active_members": [
+            {"user_id": str(uid), "name": author_names[uid], "message_count": c} for uid, c in top_members
+        ],
+    }
+    logger.info(
+        f"Message activity stats: {total_messages} messages from {len(author_counts)} members "
+        f"across {channels_scanned} channels over the last {days} days"
+    )
+    return result
+
+
+def build_activity_embed(stats: Dict[str, Any]) -> discord.Embed:
+    hod = stats["hour_of_day"]
+    dow = stats["day_of_week"]
+    trend = stats["daily_trend"]
+    peak_cell = stats["heatmap_day_by_hour"]["peak_cell"]
+
+    embed = discord.Embed(
+        title=f"📊 Message Activity — last {stats['timeframe_days']} days",
+        description=f"Timezone: `{stats['timezone']}`",
+        color=0xFDB515,
+    )
+    embed.add_field(name="Total Messages", value=f"{stats['total_messages']:,}", inline=True)
+    embed.add_field(name="Active Members", value=f"{stats['unique_active_members']:,}", inline=True)
+    embed.add_field(name="Channels Scanned", value=str(stats["channels_scanned"]), inline=True)
+
+    hour_value = (
+        f"Peak: **{hod['peak_hour']:02d}:00**\nQuietest: **{hod['quietest_hour']:02d}:00**"
+        if hod["peak_hour"] is not None else "No messages in range"
+    )
+    embed.add_field(name="Hour of Day", value=hour_value, inline=True)
+
+    day_value = (
+        f"Peak: **{dow['peak_day']}**\nQuietest: **{dow['quietest_day']}**"
+        if dow["peak_day"] is not None else "No messages in range"
+    )
+    embed.add_field(name="Day of Week", value=day_value, inline=True)
+
+    embed.add_field(
+        name="Weekday vs Weekend (avg/day)",
+        value=f"Weekday: **{dow['weekday_avg_per_day']}**\nWeekend: **{dow['weekend_avg_per_day']}**",
+        inline=True,
+    )
+    embed.add_field(name="Avg Messages / Day", value=str(trend["avg_messages_per_day"]), inline=True)
+
+    if peak_cell:
+        embed.add_field(
+            name="Busiest Hour Overall",
+            value=f"{peak_cell['day']} @ {peak_cell['hour']:02d}:00 ({peak_cell['count']} msgs)",
+            inline=True,
+        )
+
+    busiest_dates = trend.get("busiest_dates", [])
+    if busiest_dates:
+        embed.add_field(
+            name="Busiest Dates",
+            value="\n".join(f"{d['date']}: {d['count']}" for d in busiest_dates[:5]),
+            inline=True,
+        )
+
+    top_members = stats.get("top_active_members", [])
+    if top_members:
+        embed.add_field(
+            name="Top Active Members",
+            value="\n".join(f"{i + 1}. {m['name']} — {m['message_count']}" for i, m in enumerate(top_members[:5])),
+            inline=True,
+        )
+
+    channels = stats.get("channel_breakdown", {})
+    if channels:
+        embed.add_field(
+            name="Top Channels",
+            value="\n".join(f"#{name}: {count}" for name, count in list(channels.items())[:5]),
+            inline=True,
+        )
+
+    footer_bits = []
+    if stats.get("channels_skipped_no_permission"):
+        footer_bits.append(f"{len(stats['channels_skipped_no_permission'])} channel(s) skipped (no permission)")
+    if stats.get("channels_failed"):
+        footer_bits.append(f"{len(stats['channels_failed'])} channel(s) failed to scan")
+    if footer_bits:
+        embed.set_footer(text=" • ".join(footer_bits))
+
+    return embed
+
+BERKELEY_GOLD = "#FDB515"
+BERKELEY_BLUE = "#003262"
+
+def _style_bar_axes(ax, title: str, xlabel: str) -> None:
+    ax.set_ylabel("Messages")
+    ax.set_xlabel(xlabel)
+    ax.set_title(title, fontsize=13, fontweight="bold", color=BERKELEY_BLUE)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#999999")
+    ax.spines["bottom"].set_color("#999999")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.set_axisbelow(True)
+
+
+def render_hour_histogram(counts_by_hour: List[int], peak_hour: Optional[int]) -> io.BytesIO:
+    """Bar chart of message counts for each hour of the day (0-23, local time)."""
+    hours = list(range(24))
+    colors = [BERKELEY_BLUE if h == peak_hour else BERKELEY_GOLD for h in hours]
+
+    fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
+    ax.bar(hours, counts_by_hour, color=colors, edgecolor="white", linewidth=0.5)
+    ax.set_xticks(hours)
+    ax.set_xticklabels([f"{h:02d}" for h in hours], fontsize=7)
+    _style_bar_axes(ax, "Message Distribution by Hour of Day", "Hour of day (local time)")
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def render_weekday_histogram(counts_by_day: Dict[str, int], peak_day: Optional[str]) -> io.BytesIO:
+    """Bar chart of message counts for each day of the week (Monday-Sunday)."""
+    days = list(counts_by_day.keys())
+    values = list(counts_by_day.values())
+    colors = [BERKELEY_BLUE if d == peak_day else BERKELEY_GOLD for d in days]
+
+    fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
+    ax.bar(days, values, color=colors, edgecolor="white", linewidth=0.5)
+    ax.tick_params(axis="x", labelsize=8)
+    _style_bar_axes(ax, "Message Distribution by Day of Week", "Day of week")
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
 
 async def assign_role(user_id: int, role_name: str, send_welcome_msg: bool = True) -> bool:
