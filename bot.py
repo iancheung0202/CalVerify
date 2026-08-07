@@ -86,7 +86,7 @@ async def init_bot():
             days: app_commands.Range[int, 1, 365] = 90,
             tz: str = "America/Los_Angeles",
         ):
-            await interaction.response.defer(thinking=True)
+            await interaction.response.send("Generating activity stats, please wait...", ephemeral=True)
             stats = await get_message_activity(days=days, tz_name=tz)
             if not stats:
                 await interaction.followup.send(
@@ -94,7 +94,7 @@ async def init_bot():
                     ephemeral=True,
                 )
                 return
-            embed = build_activity_embed(stats)
+            embed = build_activity_embed(stats).set_footer(text=f"Requested by {interaction.user.name}")
 
             hour_buf, weekday_buf = await asyncio.gather(
                 asyncio.to_thread(
@@ -117,7 +117,7 @@ async def init_bot():
             json_bytes = json.dumps(stats, indent=2).encode("utf-8")
             json_file = discord.File(io.BytesIO(json_bytes), filename=f"activity_{stats['timeframe_days']}d.json")
 
-            await interaction.followup.send(
+            await interaction.channel.send(
                 embeds=[embed, hour_embed, weekday_embed],
                 files=[hour_file, weekday_file, json_file],
             )
