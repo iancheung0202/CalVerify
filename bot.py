@@ -208,21 +208,11 @@ async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
         primary = None
         if hasattr(user, 'primary_guild') and user.primary_guild:
             primary = str(user.primary_guild)
-        try:
-            member_data = await client.http.request(
-                discord.http.Route("GET", "/guilds/{guild_id}/members/{user_id}", guild_id=GUILD, user_id=user_id)
-            )
-            rids = set(member_data.get("roles", []))
-        except Exception as e:
-            logger.warning(f"Could not fetch role IDs via REST for {user_id}: {e}")
-            rids = set()
-        role_map = {str(r.id): r.name for r in guild.roles}
-        role_names = [role_map[rid] for rid in rids if rid in role_map]
+        role_names = [r.name for r in member.roles if r.name != "@everyone"]
         class_role = None
-        for rid in rids:
-            name = role_map.get(rid)
-            if name in ROLES:
-                class_role = name
+        for r in member.roles:
+            if r.name in ROLES:
+                class_role = r.name
                 break
         status_text = str(member.status)
         profile = {
@@ -273,26 +263,31 @@ async def assign_role(user_id: int, role_name: str, send_welcome_msg: bool = Tru
         for existing in member.roles:
             if existing.name in ROLES and existing.name != role_name:
                 remove.append(existing)
+        already_has_role = role in member.roles
+        tasks = []
         if remove:
-            await member.remove_roles(*remove, reason="Replacing with new class role - CalVerify")
+            tasks.append(member.remove_roles(*remove, reason="Replacing with new class role"))
+        main_role = discord.Object(id=MAIN_ROLE)
+        if not already_has_role:
+            tasks.append(member.add_roles(main_role, role, reason="Verified student on dashboard"))
+        if tasks:
+            await asyncio.gather(*tasks)
+        if remove:
             logger.info(f"Removed {len(remove)} old class role(s) from user {user_id}")
-        if role in member.roles:
+        if already_has_role:
             logger.info(f"User {user_id} already has role {role_name}")
             return True
-        main_role = discord.Object(id=MAIN_ROLE)
-        await member.add_roles(main_role, reason="Verified student on dashboard")
-        await member.add_roles(role, reason="Verified student on dashboard")
         logger.info(f"Assigned role '{role_name}' to user {user_id}")
         try:
             embed = discord.Embed(
                 title="<:bearWave:1105561126164504576> Welcome to the UC Berkeley Discord Server!",
                 description=(
                     f"Hi {member.mention}! You're **officially verified** as `{role_name}`! "
-                    "We are incredibly delighted to welcome you into this community, built **for students like you**. Please kindly review the [server rules](https://discord.com/channels/1009918541601980496/1009920353604218930). 💛💙\n"
+                    "We are incredibly delighted to welcome you into this community, built for students like you. Please kindly review the [server rules](https://discord.com/channels/1009918541601980496/1009920353604218930). 💛💙\n"
                     "### **Ready to jump in? Here is your quick-start guide:**\n"
                     "1. Head over to <#1106664283250626671> and drop a quick intro about yourself!\n"
                     "2. Say hi in <#1009928284173242448> and chat with other students.\n"
-                    "3. Got questions about classes, housing, or campus life? Don't be shy to ask right in chat or in <#1383249847116759161>.\n\n"
+                    "3. Got questions about classes, housing, or campus life? Don't be shy to ask in chat or <#1383249847116759161>.\n\n"
                 ),
                 color=0xFDB515
             ).set_footer(text="If you need any help, feel free to reach out to the moderators! Go Bears! 🐻")

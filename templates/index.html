@@ -756,11 +756,11 @@
             </div>
         </div>
 
-    <footer style="width:100%;text-align:center;margin-top:40px;margin-bottom:10px;">
+    <!-- <footer style="width:100%;text-align:center;margin-top:40px;margin-bottom:10px;">
         <a href="https://www.ocf.berkeley.edu" target="_blank" rel="noopener">
             <img src="https://www.ocf.berkeley.edu/hosting-logos/ocf-hosted-penguin-dark.svg" alt="Hosted by the OCF" style="border:0;max-width:90px;max-height:40px;width:auto;height:auto;vertical-align:middle;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-radius:6px;background:#fff;padding:2px;" />
         </a>
-    </footer>
+    </footer> -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const loginSection = document.getElementById('loginSection');
@@ -974,7 +974,7 @@
             nextBtn.disabled = entryIdx === entries.length - 1;
             if (e.email) {
                 searchInput.value = e.email;
-                if (search) doSearch(e.email);
+                if (search) doSearch(e.email, e.student_id || null);
             }
         }
 
@@ -1112,26 +1112,6 @@
             if (e && e.student_id) { searchInput.value = e.student_id; doSearch(e.student_id); }
         });
 
-        async function refreshEntry(rowIndex) {
-            try {
-                const res = await fetch('/student-entries', { credentials: 'include' });
-                if (!res.ok) { if (res.status === 401) { onUnauthorized(); return; } return; }
-                const data = await res.json();
-                const newList = data.entries || [];
-                const updated = newList.find(e => e.row_index === rowIndex);
-                if (updated) {
-                    const idx = entries.findIndex(e => e.row_index === rowIndex);
-                    if (idx !== -1) {
-                        entries[idx] = updated;
-                        if (entryIdx === idx) showEntry();
-                    }
-                }
-            } catch (err) {
-                console.error('Error refreshing entry:', err);
-                await loadEntries();
-            }
-        }
-
         searchForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!authed) { onError('Please login first'); return; }
@@ -1148,7 +1128,7 @@
             searchInput.focus();
         });
 
-        async function doSearch(q) {
+        async function doSearch(q, fallbackQ) {
             const mySeq = ++searchRequestSeq;
             loading.classList.add('active');
             resultsSection.classList.remove('active');
@@ -1167,6 +1147,13 @@
                 }
                 const data = await res.json();
                 if (mySeq !== searchRequestSeq) return; // discard again in case a newer search started while parsing
+                const hasResults = data.results && Object.keys(data.results).length > 0;
+                if (!hasResults && fallbackQ) {
+                    // Email search came up empty; silently retry by student ID before showing "no results".
+                    searchInput.value = fallbackQ;
+                    await doSearch(fallbackQ);
+                    return;
+                }
                 renderResults(data);
             } catch (err) {
                 if (mySeq !== searchRequestSeq) return;
@@ -1268,14 +1255,18 @@
             el.addEventListener('click', () => { clearTimeout(timer); el.classList.add('hide'); setTimeout(() => el.remove(), 300); });
         }
 
-        async function setColor(rowIndex, hex) {
+        async function setColor(rowIndex, hex, discordUserId) {
             const btns = document.querySelectorAll('.btn-action');
             btns.forEach(b => b.classList.add('loading'));
             try {
+                const body = { row_index: rowIndex, color_hex: hex };
+                // Piggyback the discord_user_id write on this same request when provided, so
+                // verifying a student only needs one Sheets-update round trip instead of two.
+                if (discordUserId !== undefined && discordUserId !== null) body.discord_user_id = discordUserId;
                 const res = await fetch('/update-entry-color', {
                     method: 'POST', credentials: 'include',
                     headers: {'Content-Type': 'application/json', 'Referer': window.location.href},
-                    body: JSON.stringify({row_index: rowIndex, color_hex: hex})
+                    body: JSON.stringify(body)
                 });
                 if (!res.ok) {
                     if (res.status === 401) { onUnauthorized(); return false; }
@@ -1285,6 +1276,7 @@
                 const idx = entries.findIndex(e => e.row_index === rowIndex);
                 if (idx !== -1) {
                     entries[idx].background_color = hex;
+                    if (discordUserId !== undefined && discordUserId !== null) entries[idx].discord_user_id = discordUserId;
                     if (idx === entryIdx) showEntry(false);
                 }
                 toast('Color updated successfully', 'success');
@@ -1542,7 +1534,7 @@
             nextBtn.disabled = false;
             prevUnverifiedBtn.disabled = false;
             nextUnverifiedBtn.disabled = false;
-            if (m.email) { searchInput.value = m.email; doSearch(m.email); }
+            if (m.email) { searchInput.value = m.email; doSearch(m.email, m.student_id || null); }
             showHighlighted(m);
         }
 
@@ -1589,26 +1581,31 @@
             roleDropdown.disabled = true;
             confirmBtn.classList.add('loading');
             try {
-                const pres = await fetch('/discord/user-profile', {
-                    method: 'POST', credentials: 'include',
-                    headers: {'Content-Type': 'application/json', 'Referer': window.location.href},
-                    body: JSON.stringify({discord_username: modalEntry.discord_username})
-                });
-                const pdata = await pres.json();
-                if (!pres.ok) {
-                    if (pres.status === 401) { onUnauthorized(); closeModal(); return; }
-                    roleError.textContent = 'Failed to fetch user ID. Please try again.';
-                    roleError.classList.add('active');
-                    assigning = false; confirmBtn.disabled = false; skipBtn.disabled = false; roleDropdown.disabled = false; confirmBtn.classList.remove('loading');
-                    return;
+                let uid;
+                if (modalProfile && modalProfile.user_id) {
+                    uid = modalProfile.user_id;
+                } else {
+                    const pres = await fetch('/discord/user-profile', {
+                        method: 'POST', credentials: 'include',
+                        headers: {'Content-Type': 'application/json', 'Referer': window.location.href},
+                        body: JSON.stringify({discord_username: modalEntry.discord_username})
+                    });
+                    const pdata = await pres.json();
+                    if (!pres.ok) {
+                        if (pres.status === 401) { onUnauthorized(); closeModal(); return; }
+                        roleError.textContent = 'Failed to fetch user ID. Please try again.';
+                        roleError.classList.add('active');
+                        assigning = false; confirmBtn.disabled = false; skipBtn.disabled = false; roleDropdown.disabled = false; confirmBtn.classList.remove('loading');
+                        return;
+                    }
+                    if (!pdata.success || !pdata.profile) {
+                        roleError.textContent = 'Failed to fetch user ID. Please try again.';
+                        roleError.classList.add('active');
+                        assigning = false; confirmBtn.disabled = false; skipBtn.disabled = false; roleDropdown.disabled = false; confirmBtn.classList.remove('loading');
+                        return;
+                    }
+                    uid = pdata.profile.user_id;
                 }
-                if (!pdata.success || !pdata.profile) {
-                    roleError.textContent = 'Failed to fetch user ID. Please try again.';
-                    roleError.classList.add('active');
-                    assigning = false; confirmBtn.disabled = false; skipBtn.disabled = false; roleDropdown.disabled = false; confirmBtn.classList.remove('loading');
-                    return;
-                }
-                const uid = pdata.profile.user_id;
                 const role = roleDropdown.value;
                 const welcome = document.getElementById('sendWelcomeMsg').checked;
                 const ares = await fetch('/discord/assign-role', {
@@ -1633,8 +1630,7 @@
                 const ridx = modalEntry.row_index;
                 toast(`Role '${role}' assigned! Marking student as verified...`, 'success');
                 closeModal();
-                await setColor(ridx, '#D9EAD3');
-                await setDiscordId(ridx, String(uid));
+                await setColor(ridx, '#D9EAD3', String(uid));
                 toast(`Student verified with role '${role}'!`, 'success');
                 maybeAutoAdvance();
             } catch (err) {
@@ -1656,8 +1652,7 @@
             const profile = modalProfile;
             closeModal();
             toast('Marking student as verified (without role assignment)...', 'info');
-            await setColor(ridx, '#D9EAD3');
-            if (profile && profile.user_id) await setDiscordId(ridx, String(profile.user_id));
+            await setColor(ridx, '#D9EAD3', profile && profile.user_id ? String(profile.user_id) : undefined);
             toast('Student verified!', 'success');
             maybeAutoAdvance();
         });
@@ -1674,23 +1669,6 @@
             } catch (err) {
                 toast(`Error: ${err.message}`, 'error');
                 console.error('Error updating discord username:', err);
-                return false;
-            }
-        }
-
-        async function setDiscordId(rowIndex, did) {
-            try {
-                const res = await fetch('/update-entry-discord-id', {
-                    method: 'POST', credentials: 'include',
-                    headers: {'Content-Type': 'application/json', 'Referer': window.location.href},
-                    body: JSON.stringify({row_index: rowIndex, discord_user_id: did})
-                });
-                if (!res.ok) { if (res.status === 401) { onUnauthorized(); return false; } const d = await res.json(); throw new Error(d.detail || 'Failed to update discord user ID'); }
-                const idx = entries.findIndex(e => e.row_index === rowIndex);
-                if (idx !== -1) { entries[idx].discord_user_id = did; if (idx === entryIdx) showEntry(false); }
-                return true;
-            } catch (err) {
-                console.error('Error updating discord user ID:', err);
                 return false;
             }
         }

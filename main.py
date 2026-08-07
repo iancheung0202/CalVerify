@@ -244,16 +244,6 @@ def save_manifest(manifest: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Error saving manifest.json: {str(e)}")
 
-def parse_sheet_url(url: str) -> tuple:
-    try:
-        match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url)
-        gid_match = re.search(r'[?#&]gid=(\d+)', url)
-        if match and gid_match:
-            return match.group(1), gid_match.group(1)
-    except Exception as e:
-        logger.error(f"Error extracting sheet info from URL: {str(e)}")
-    return None, None
-
 def download_sheet(drive, ss, sheet_id: str, gid: str = "0") -> tuple:
     try:
         name = "Sheet"
@@ -573,10 +563,13 @@ async def set_color(request: Request):
         raise HTTPException(status_code=400, detail="Invalid request")
     row_idx = data.get("row_index")
     color = data.get("color_hex")
+    discord_user_id = data.get("discord_user_id")
     if row_idx is None or not isinstance(row_idx, int) or row_idx < 1:
         raise HTTPException(status_code=400, detail="Invalid row index")
     if not color or not isinstance(color, str) or not color.startswith("#"):
         raise HTTPException(status_code=400, detail="Invalid color format")
+    if discord_user_id is not None and not isinstance(discord_user_id, str):
+        raise HTTPException(status_code=400, detail="Invalid discord user ID format")
     try:
         if not sheets:
             raise Exception("Google Sheets API not initialized")
@@ -592,8 +585,16 @@ async def set_color(request: Request):
                     "fields": "userEnteredFormat.backgroundColor"
                 }
             })
+        if discord_user_id is not None:
+            reqs.append({
+                "updateCells": {
+                    "range": {"sheetId": sid, "startRowIndex": row_idx, "endRowIndex": row_idx + 1, "startColumnIndex": 8, "endColumnIndex": 9},
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": discord_user_id}}]}],
+                    "fields": "userEnteredValue"
+                }
+            })
         sheets.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": reqs}).execute()
-        logger.info(f"Updated color for row {row_idx} to {color}")
+        logger.info(f"Updated color for row {row_idx} to {color}" + (f" and discord_user_id to '{discord_user_id}'" if discord_user_id is not None else ""))
         return {"success": True, "message": "Color updated successfully"}
     except Exception as e:
         logger.error(f"Error updating entry color: {str(e)}")
@@ -656,35 +657,6 @@ async def set_discord_user(request: Request):
     except Exception as e:
         logger.error(f"Error updating discord username: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update discord username")
-
-@app.post("/update-entry-discord-id")
-async def set_discord_id(request: Request):
-    if not await authed(request):
-        raise HTTPException(status_code=401, detail="Not authenticated. Please login first.")
-    ip = client_ip(request)
-    if rate_limited(ip, searches, SEARCH_MAX, SEARCH_WIN):
-        raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
-    try:
-        data = await request.json()
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request")
-    row_idx = data.get("row_index")
-    did = data.get("discord_user_id", "")
-    if row_idx is None or not isinstance(row_idx, int) or row_idx < 1:
-        raise HTTPException(status_code=400, detail="Invalid row index")
-    try:
-        if not sheets:
-            raise Exception("Google Sheets API not initialized")
-        cell = f"'Form Responses 1'!I{row_idx + 1}"
-        sheets.spreadsheets().values().update(
-            spreadsheetId=SHEET_ID, range=cell, valueInputOption="USER_ENTERED",
-            body={"values": [[did]]}
-        ).execute()
-        logger.info(f"Updated discord user ID for row {row_idx} to '{did}'")
-        return {"success": True, "message": "Discord user ID updated successfully"}
-    except Exception as e:
-        logger.error(f"Error updating discord user ID: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to update discord user ID")
 
 
 @app.get("/me")
