@@ -807,6 +807,7 @@
         let searchActive = false;
         let matches = [];
         let matchIdx = 0;
+        let searchRequestSeq = 0;
 
         function onUnauthorized(msg) {
             console.warn('Unauthorized - clearing session');
@@ -933,7 +934,8 @@
             }
         }
 
-        function showEntry() {
+        function showEntry(search) {
+            if (search === undefined) search = true;
             if (entries.length === 0) return;
             entryIdx = Math.max(0, Math.min(entryIdx, entries.length - 1));
             const e = entries[entryIdx];
@@ -972,7 +974,7 @@
             nextBtn.disabled = entryIdx === entries.length - 1;
             if (e.email) {
                 searchInput.value = e.email;
-                doSearch(e.email);
+                if (search) doSearch(e.email);
             }
         }
 
@@ -1147,6 +1149,7 @@
         });
 
         async function doSearch(q) {
+            const mySeq = ++searchRequestSeq;
             loading.classList.add('active');
             resultsSection.classList.remove('active');
             noResults.style.display = 'none';
@@ -1156,18 +1159,21 @@
                     method: 'POST', credentials: 'include',
                     headers: {'Content-Type': 'application/json', 'Referer': window.location.href}
                 });
+                if (mySeq !== searchRequestSeq) return; // a newer search has since been started; discard this stale response
                 if (!res.ok) {
                     if (res.status === 401) { onUnauthorized(); return; }
                     if (res.status === 403) throw new Error('Access denied. Requests must come from verify.iancheung.dev');
                     throw new Error('Search failed');
                 }
                 const data = await res.json();
+                if (mySeq !== searchRequestSeq) return; // discard again in case a newer search started while parsing
                 renderResults(data);
             } catch (err) {
+                if (mySeq !== searchRequestSeq) return;
                 onError('An error occurred during search. Please try again.');
                 console.error(err);
             } finally {
-                loading.classList.remove('active');
+                if (mySeq === searchRequestSeq) loading.classList.remove('active');
             }
         }
 
@@ -1279,7 +1285,7 @@
                 const idx = entries.findIndex(e => e.row_index === rowIndex);
                 if (idx !== -1) {
                     entries[idx].background_color = hex;
-                    if (idx === entryIdx) showEntry();
+                    if (idx === entryIdx) showEntry(false);
                 }
                 toast('Color updated successfully', 'success');
                 return true;
@@ -1311,7 +1317,7 @@
                     throw new Error(data.detail || 'Failed to update notes');
                 }
                 entries[entryIdx].notes = val;
-                showEntry();
+                showEntry(false);
                 toast('Notes updated successfully', 'success');
             } catch (err) {
                 toast(`Error: ${err.message}`, 'error');
@@ -1681,7 +1687,7 @@
                 });
                 if (!res.ok) { if (res.status === 401) { onUnauthorized(); return false; } const d = await res.json(); throw new Error(d.detail || 'Failed to update discord user ID'); }
                 const idx = entries.findIndex(e => e.row_index === rowIndex);
-                if (idx !== -1) { entries[idx].discord_user_id = did; if (idx === entryIdx) showEntry(); }
+                if (idx !== -1) { entries[idx].discord_user_id = did; if (idx === entryIdx) showEntry(false); }
                 return true;
             } catch (err) {
                 console.error('Error updating discord user ID:', err);
@@ -1702,7 +1708,7 @@
                 const ok = await setDiscordUser(ridx, val.trim());
                 if (ok) {
                     entries[entryIdx].discord_username = val.trim();
-                    showEntry();
+                    showEntry(false);
                     toast('Discord username updated successfully', 'success');
                 }
             } finally {

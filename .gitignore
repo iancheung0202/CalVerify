@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 *.json
 *.db
+.DS_Store
