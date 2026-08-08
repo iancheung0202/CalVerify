@@ -3,9 +3,13 @@ import re
 import html
 import feedparser
 import requests
+import os
+from dotenv import load_dotenv
 
-FEED_URL = "http://155.94.153.50:1812/?action=display&bridge=InstagramBridge&context=Username&u=ucberkeleylife&media_type=all&direct_links=on&format=Mrss"
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1227377666655780935/uJ2mLsbivb-g3RbKQcVccd-S_DNvYTNJa26vX8e7gh-NgM8Pgt70cVr324g3r19WPMoR"
+load_dotenv()
+
+FEED_URL = os.getenv("INSTAGRAM_FEED_URL")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 CHECK_INTERVAL_SECONDS = 60
 LAST_POST_FILE = "last_post.txt"
 
