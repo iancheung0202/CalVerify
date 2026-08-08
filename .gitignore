@@ -6,3 +6,4 @@ __pycache__/
 *.json
 *.db
 .DS_Store
+last_post.txt
