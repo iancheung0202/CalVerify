@@ -121,9 +121,9 @@ searches: Dict[str, List[float]] = defaultdict(list)
 SEARCH_MAX = 120
 SEARCH_WIN = 60
 
-SESSION_TTL = 3600
+SESSION_TTL = 604800
 SESSION_COOKIE = "session_token"
-SESSION_MAX_AGE = 3600
+SESSION_MAX_AGE = 604800
 
 sessions: Dict[str, Dict[str, Any]] = {}
 sessions_lock = Lock()
@@ -163,6 +163,7 @@ async def authed(request: Request) -> bool:
     if time.time() > data.get("expires_at", 0):
         sessions.pop(token, None)
         return False
+    data["expires_at"] = time.time() + SESSION_TTL
     return True
 
 def create_session(ip: str, email: str) -> str:
@@ -670,6 +671,7 @@ async def current_user(request: Request):
     if time.time() > data.get("expires_at", 0):
         sessions.pop(token, None)
         raise HTTPException(status_code=401, detail="Session expired")
+    data["expires_at"] = time.time() + SESSION_TTL
     return {"email": data.get("email", "")}
 
 @app.get("/roles")
