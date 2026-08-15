@@ -223,7 +223,7 @@
             font-weight: 700; letter-spacing: -0.02em; line-height: 1.1;
             font-size: clamp(1.55rem, 3vw, 2.35rem);
         }
-        .search-section .search-sub { color: var(--text-2); margin: 16px 0 25px 0; font-size: 15px; }
+        .search-section .search-sub { color: var(--text-2); margin-bottom: 25px; font-size: 15px; }
         .nav-chips { display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; }
         .nav-chip {
             display: inline-flex; align-items: center; gap: 6px; color: var(--text-2);
@@ -253,7 +253,7 @@
         .btn-clear:active { transform: scale(0.97); }
         .results-section { display: none; width: 100%; max-width: 100%; box-sizing: border-box; overflow-x: hidden; }
         .results-section.active { display: block; animation: fadeIn var(--dur-3) var(--ease-out); }
-        .results-header { margin-top: 30px; text-align: center; margin-bottom: 30px; }
+        .results-header { margin-top: 10px; text-align: center; margin-bottom: 20px; }
         .results-header h2 { color: var(--text-1); margin-bottom: 8px; font-weight: 700; letter-spacing: -0.01em; }
         .results-header p { color: var(--text-2); font-size: 14px; }
         .file-group {
@@ -274,7 +274,7 @@
         .file-header .file-chevron { display: inline-flex; color: rgba(255, 255, 255, 0.75); font-size: 12px; transition: transform var(--dur-2) var(--ease-out); }
         .file-header.collapsed .file-chevron { transform: rotate(-90deg); }
         .file-header .badge { background: var(--badge-bg); color: var(--badge-tx); font-weight: 700; padding: 5px 12px; border-radius: 999px; }
-        .file-sync { color: rgba(255, 255, 255, 0.72); font-size: 12px; margin-top: 4px; display: block; }
+        .file-sync { color: rgba(255, 255, 255, 0.72); font-size: 12px; margin-top: 4px; display: block; text-align: left; }
         .file-content {
             padding: 20px; display: none; max-height: 800px; overflow-y: auto; overflow-x: hidden;
             width: 100%; max-width: 100%; box-sizing: border-box; background: var(--surface);
@@ -290,7 +290,7 @@
             background: var(--surface); color: var(--text-1); border-collapse: collapse; width: 100%;
             max-width: 100%; box-sizing: border-box;
         }
-        th { background: var(--surface-3); font-weight: 600; text-align: left; padding: 12px; border-bottom: 2px solid var(--border); color: var(--text-2); font-size: 14px; transition: var(--theme-transition); }
+        th { background: var(--surface-3); font-weight: 600; text-align: center; padding: 12px; border-bottom: 2px solid var(--border); color: var(--text-2); font-size: 14px; transition: var(--theme-transition); }
         td { padding: 12px; border-bottom: 1px solid var(--border-weak); word-break: break-word; font-size: 14px; color: var(--text-1); transition: var(--theme-transition); }
         tbody tr:hover { background: var(--row-hover); }
         .no-results { text-align: center; padding: 40px 20px; color: var(--text-3); width: 100%; max-width: 100%; box-sizing: border-box; overflow-x: hidden; }
@@ -823,7 +823,7 @@
         </div>
 
         <div class="search-section" id="searchSection" style="display: none;">
-            <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; margin-bottom: 30px;">
+            <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
                 <h1 class="search-title">UC Berkeley Discord Verification Dashboard</h1>
                 <p class="search-sub nav-chips">
                     <a role="button" class="nav-chip" id="rolesBtn"><i class="fas fa-user-shield"></i> Role Management</a>
