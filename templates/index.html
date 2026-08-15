@@ -7,6 +7,17 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script>
+        // Applied before the stylesheet paints anything, so there's no flash of the wrong theme.
+        (function() {
+            try {
+                var saved = localStorage.getItem('calverify_theme');
+                if (saved === 'light' || saved === 'dark') {
+                    document.documentElement.setAttribute('data-theme', saved);
+                }
+            } catch (e) {}
+        })();
+    </script>
     <style>
         * { box-sizing: border-box; }
         html { font-size: 16px; width: 100vw; overflow-x: hidden; }
@@ -90,6 +101,67 @@
                 --scroll-thumb: rgba(232, 236, 242, 0.2);
             }
         }
+        /* Explicit overrides applied when the user manually picks a theme (M keybind), so the
+           choice wins over prefers-color-scheme regardless of OS setting. Absence of the
+           [data-theme] attribute means "system" and the media query above is used instead. */
+        :root[data-theme="light"] {
+            color-scheme: light;
+            --primary: #003262; --primary-hover: #0A4A8C;
+            --primary-soft: rgba(0, 50, 98, 0.08);
+            --on-primary: #ffffff;
+            --accent: #FDB515; --accent-strong: #C4820E; --accent-soft: rgba(253, 181, 21, 0.16);
+            --bg: #F8F8F8;
+            --surface: #ffffff; --surface-2: #F5F6F8; --surface-3: #ECEEF2;
+            --border: #E5E8EC; --border-weak: #EEF1F5; --border-strong: #D3D9E0;
+            --text-1: #1B1F24; --text-2: #5C6470; --text-3: #8A93A0;
+            --input-bg: #ffffff; --input-border: #D3D9E0;
+            --focus-ring: rgba(0, 50, 98, 0.22);
+            --row-hover: #F2F6FA;
+            --mark-bg: #FCE8A8; --mark-tx: #4A3A00;
+            --badge-bg: #FDB515; --badge-tx: #003262;
+            --role-badge-bg: #003262; --role-badge-tx: #ffffff;
+            --hd-grad: linear-gradient(120deg, #003262, #0A4A8C 72%, #3B7EA1);
+            --hd-collapsed: #5B6F86;
+            --toast-bg: rgba(255, 255, 255, 0.92);
+            --scrim: rgba(11, 18, 32, 0.55);
+            --scrim-solid: rgba(11, 18, 32, 0.92);
+            --title-tx: #003262;
+            --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 16px 40px -16px rgba(16, 24, 40, 0.18);
+            --shadow-pop: 0 4px 12px rgba(16, 24, 40, 0.08), 0 24px 48px -16px rgba(16, 24, 40, 0.28);
+            --danger-bg: #FEF1F0; --danger-border: #F5C2BD; --danger-tx: #B42318;
+            --info-bg: #EAF2FB; --info-border: #3B7EA1; --info-tx: #12569B;
+            --btn-disabled: #C9CFD6;
+            --scroll-thumb: rgba(16, 24, 40, 0.22);
+        }
+        :root[data-theme="dark"] {
+            color-scheme: dark;
+            --primary: #FDB515; --primary-hover: #FFCB4D;
+            --primary-soft: rgba(253, 181, 21, 0.13);
+            --on-primary: #0B1220;
+            --accent: #FDB515; --accent-strong: #FFCB4D; --accent-soft: rgba(253, 181, 21, 0.16);
+            --bg: #0B1220;
+            --surface: #141E31; --surface-2: #1A2639; --surface-3: #22304A;
+            --border: #263349; --border-weak: #1E2A3F; --border-strong: #32405C;
+            --text-1: #E8ECF2; --text-2: #A9B4C4; --text-3: #7C8798;
+            --input-bg: #101A2C; --input-border: #32405C;
+            --focus-ring: rgba(253, 181, 21, 0.35);
+            --row-hover: #1C2A40;
+            --mark-bg: #6B5413; --mark-tx: #FFE7A0;
+            --badge-bg: #FDB515; --badge-tx: #0B1220;
+            --role-badge-bg: #1D5A9E; --role-badge-tx: #ffffff;
+            --hd-grad: linear-gradient(120deg, #0A3D6E, #1D5A9E 72%, #3B7EA1);
+            --hd-collapsed: #31425B;
+            --toast-bg: rgba(20, 30, 49, 0.94);
+            --scrim: rgba(4, 10, 18, 0.66);
+            --scrim-solid: rgba(4, 10, 18, 0.97);
+            --title-tx: #FDB515;
+            --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px -16px rgba(0, 0, 0, 0.5);
+            --shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.35), 0 24px 48px -16px rgba(0, 0, 0, 0.6);
+            --danger-bg: #2A1518; --danger-border: #5D2A2E; --danger-tx: #F3B4B0;
+            --info-bg: #10233B; --info-border: #3B7EA1; --info-tx: #7FB4D8;
+            --btn-disabled: #3A4763;
+            --scroll-thumb: rgba(232, 236, 242, 0.2);
+        }
         body {
             min-height: 100vh; display: flex; align-items: center; justify-content: center;
             font-family: var(--font-ui); margin: 0; padding: 0; width: 100%; max-width: 100vw;
@@ -110,7 +182,7 @@
         @keyframes toast-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         @keyframes pulse-bg { from { background: var(--accent-soft); } to { background: rgba(253, 181, 21, 0.32); } }
         .login-card { max-width: 400px; margin: 0 auto; text-align: center; padding: 24px 8px; animation: pop-in var(--dur-3) var(--ease-out); transition: var(--theme-transition); }
-        .login-title, .modal-title { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+        .login-title, .modal-title { font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
         .login-title { font-size: 1.9rem; margin: 0 0 4px 0; color: var(--title-tx, var(--primary)); }
         .login-sub { margin: 12px 0 12px 0; color: var(--text-2); font-size: 14px; }
         .login-restricted {
@@ -136,10 +208,18 @@
         }
         @keyframes orb-drift-1 { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(5vmax, 3.5vmax, 0) scale(1.06); } }
         @keyframes orb-drift-2 { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(-4vmax, -3vmax, 0) scale(1.08); } }
-        .google-signin { display: flex; justify-content: center; margin-top: 20px; padding-bottom: 6px; width: 100%; }
+        .google-signin {
+            display: flex; justify-content: center; margin-top: 20px; padding-bottom: 6px; width: 100%;
+            /* Google's GSI iframe doesn't inherit our dark color-scheme, so without this the
+               browser paints an opaque light canvas behind the button's transparent edges.
+               Scoping color-scheme:light to just this wrapper keeps the iframe's canvas matched
+               to its own (light) rendering so no white box shows around the button. */
+            color-scheme: light;
+        }
+        .google-signin iframe { color-scheme: light; }
         .search-section { margin-bottom: 40px; text-align: center; }
         .search-section .search-title {
-            font-family: var(--font-display); color: var(--primary); margin: 0 0 10px 0;
+            color: var(--primary); margin: 0 0 10px 0;
             font-weight: 700; letter-spacing: -0.02em; line-height: 1.1;
             font-size: clamp(1.55rem, 3vw, 2.35rem);
         }
@@ -174,7 +254,7 @@
         .results-section { display: none; width: 100%; max-width: 100%; box-sizing: border-box; overflow-x: hidden; }
         .results-section.active { display: block; animation: fadeIn var(--dur-3) var(--ease-out); }
         .results-header { margin-top: 30px; text-align: center; margin-bottom: 30px; }
-        .results-header h2 { color: var(--text-1); margin-bottom: 8px; font-family: var(--font-display); font-weight: 700; letter-spacing: -0.01em; }
+        .results-header h2 { color: var(--text-1); margin-bottom: 8px; font-weight: 700; letter-spacing: -0.01em; }
         .results-header p { color: var(--text-2); font-size: 14px; }
         .file-group {
             margin-bottom: 30px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
@@ -452,7 +532,7 @@
         }
         .verify-modal-close:hover { background: var(--border); color: var(--text-1); }
         .verify-modal-header { text-align: center; margin-bottom: 30px; padding-right: 40px; }
-        .verify-modal-header h2 { margin: 0 0 5px 0; font-size: 24px; font-weight: 700; color: var(--text-1); font-family: var(--font-display); letter-spacing: -0.01em; }
+        .verify-modal-header h2 { margin: 0 0 5px 0; font-size: 24px; font-weight: 700; color: var(--text-1); }
         .verify-modal-header p { margin: 0; color: var(--text-2); font-size: 14px; }
         .verify-modal-body { display: grid; grid-template-columns: 35% 65%; gap: 30px; width: 100%; max-width: 100%; box-sizing: border-box; }
         .verify-modal-profile {
@@ -572,22 +652,16 @@
             .verify-btn { font-size: 12px; padding: 10px 12px; min-width: 120px; min-height: 40px; }
             .verify-btn i { font-size: 14px; }
         }
-        .manage-sheet-modal-content { display: grid; grid-template-columns: 35% 65%; grid-template-rows: minmax(0, 1fr); gap: 30px; height: min(72vh, 780px); max-height: 80vh; overflow: hidden; }
-        .manage-sheet-column { display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
-        .manage-sheet-header { margin-bottom: 12px; flex-shrink: 0; }
-        .manage-sheet-header h3 { margin: 0 0 4px 0; font-size: 16px; font-weight: 700; color: var(--text-1); }
-        .manage-sheet-header p { margin: 0; color: var(--text-2); font-size: 13px; }
+        .manage-sheet-section { display: flex; flex-direction: column; gap: 10px; }
+        .manage-sheet-section-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--text-1); }
         .manage-sheet-list {
-            flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px;
+            max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px;
             background: var(--surface-2); transition: var(--theme-transition);
         }
         .manage-sheet-loading { text-align: center; padding: 20px; color: var(--text-3); }
         .manage-sheet-loading i { font-size: 24px; margin-bottom: 10px; }
-        .manage-sheet-form-container { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-        .manage-sheet-form-container > div:first-child { margin: 0; padding: 10px 12px; background: var(--surface-3); border-radius: 10px; font-size: 13px; line-height: 1.4; flex-shrink: 0; transition: var(--theme-transition); }
-        .manage-sheet-form-container code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-        .manage-sheet-form-container form { display: flex; flex-direction: column; gap: 8px; margin: 0; }
-        .manage-sheet-input-group { margin: 0; flex-shrink: 0; }
+        .manage-sheet-form-container { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+        .manage-sheet-input-group { margin: 0; }
         .manage-sheet-input-group label { display: block; margin-bottom: 5px; font-weight: 600; font-size: 14px; color: var(--text-1); }
         .manage-sheet-input-group input { width: 100%; padding: 10px; border: 1px solid var(--input-border); border-radius: 8px; background: var(--input-bg); color: var(--text-1); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; box-sizing: border-box; transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease, var(--theme-transition); }
         .manage-sheet-input-group input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus-ring); }
@@ -635,22 +709,11 @@
         .role-remove:hover:not(.is-disabled) { background: #c0392b; }
         .role-remove:active:not(.is-disabled) { transform: scale(0.96); }
         .role-remove.is-disabled { opacity: 0.5; cursor: not-allowed; }
-        @media (max-width: 1024px) {
-            .manage-sheet-modal-content { grid-template-columns: 1fr; grid-template-rows: none; gap: 20px; height: auto; max-height: none; overflow: visible; }
-            .manage-sheet-column { min-height: 300px; }
-        }
         @media (max-width: 768px) {
-            .manage-sheet-modal-content { gap: 15px; max-height: 90vh; }
-            .manage-sheet-header { margin-bottom: 12px; }
-            .manage-sheet-header h3 { font-size: 15px; margin-bottom: 4px; }
-            .manage-sheet-header p { font-size: 12px; }
-            .manage-sheet-column { min-height: 250px; }
-            .manage-sheet-list { border-radius: 10px; }
+            .manage-sheet-section-title { font-size: 14px; }
+            .manage-sheet-list { max-height: 180px; border-radius: 10px; }
             .manage-sheet-loading { padding: 15px; }
             .manage-sheet-loading i { font-size: 20px; }
-            .manage-sheet-form-container > div:first-child { padding: 10px; font-size: 12px; line-height: 1.4; margin: 0; }
-            .manage-sheet-form-container code { font-size: 10px; padding: 2px 4px; }
-            .manage-sheet-input-group { margin: 0; }
             .manage-sheet-input-group label { font-size: 13px; margin-bottom: 5px; }
             .manage-sheet-input-group input { padding: 9px; font-size: 12px; }
             .manage-sheet-input-group small { font-size: 11px; margin-top: 3px; }
@@ -661,13 +724,7 @@
             .manage-sheet-button { margin-top: 8px; padding: 8px 12px !important; min-height: 36px !important; font-size: 12px; }
         }
         @media (max-width: 480px) {
-            .manage-sheet-modal-content { gap: 12px; }
-            .manage-sheet-header { margin-bottom: 10px; }
-            .manage-sheet-header h3 { font-size: 14px; }
-            .manage-sheet-header p { font-size: 11px; }
-            .manage-sheet-column { min-height: 200px; }
-            .manage-sheet-form-container > div:first-child { padding: 8px; font-size: 11px; margin: 0; }
-            .manage-sheet-input-group { margin: 0; }
+            .manage-sheet-section-title { font-size: 13px; }
             .manage-sheet-input-group label { font-size: 12px; }
             .manage-sheet-input-group input { padding: 8px; font-size: 11px; }
             .manage-sheet-button { margin-top: 8px; font-size: 11px; }
@@ -682,35 +739,9 @@
         }
         .auto-advance-badge i { font-size: 10px; }
 
-        .keybinds-help-overlay {
-            display: none; position: fixed; inset: 0; z-index: 10000;
-            background: var(--scrim); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
-            justify-content: center; align-items: center; animation: fadeIn var(--dur-3) ease;
-        }
-        .keybinds-help-overlay.active { display: flex; }
-        .keybinds-help-content {
-            background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
-            padding: 30px; max-width: 420px; width: 90%; box-shadow: var(--shadow-pop);
-            max-height: 80vh; overflow-y: auto; animation: pop-in var(--dur-3) var(--ease-out);
-            transition: var(--theme-transition);
-        }
-        .keybinds-help-content h2 { margin: 0 0 4px 0; font-size: 20px; font-weight: 700; color: var(--text-1); font-family: var(--font-display); letter-spacing: -0.01em; }
-        .keybinds-help-content p { margin: 0 0 16px 0; color: var(--text-2); font-size: 14px; }
-        .keybinds-help-list { display: flex; flex-direction: column; gap: 6px; }
-        .keybinds-help-item {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border-weak); border-radius: 10px;
-            transition: var(--theme-transition);
-        }
-        .keybinds-help-label { font-size: 14px; color: var(--text-1); }
-        kbd.keybinds-help-key {
-            background: var(--surface-3); color: var(--text-1); padding: 5px 10px; border-radius: 6px;
-            border: 1px solid var(--border); border-bottom-width: 2px; box-shadow: 0 1px 0 var(--border);
-            font-size: 12px; font-weight: 600; font-family: var(--font-ui); min-width: 28px;
-            text-align: center; transition: var(--theme-transition);
-        }
+        .keybinds-help-list { display: flex; flex-direction: column; gap: 6px; width: 100%; }
         .keybinds-help-footer {
-            margin-top: 16px; text-align: center; color: var(--text-3); font-size: 13px;
+            margin-top: 4px; text-align: center; color: var(--text-3); font-size: 13px;
         }
         .keybinds-help-footer kbd {
             background: var(--surface-3); padding: 2px 8px; border-radius: 5px;
@@ -758,7 +789,6 @@
             .verify-modal.closing { transform: translate(-50%, -50%); transition: opacity var(--dur-2) ease; }
             .verify-modal-backdrop { animation: fadeIn var(--dur-2) ease; }
             .verify-modal-backdrop.closing { animation: none; }
-            .keybinds-help-content { animation: fadeIn var(--dur-2) ease; }
             .keybind-key.listening { animation: none; }
             .btn-search:active, .btn-clear:active, .btn-action:active, .btn-entry-search:active, .btn-entry-clear:active,
             .entry-main-nav button:active, .verify-btn:active, .sheet-action:active, .keybind-key:active,
@@ -768,12 +798,12 @@
         }
         @media (prefers-reduced-transparency: reduce) {
             .toast { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
-            .verify-modal-backdrop, .keybinds-help-overlay { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--scrim-solid); }
+            .verify-modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--scrim-solid); }
             .bg-orb { filter: none; }
         }
         @media (prefers-contrast: more) {
             .container-main, .bento-left, .bento-right, .file-group, .verify-modal-content,
-            .keybinds-help-content, .manage-sheet-list { border-color: var(--text-3); }
+            .manage-sheet-list { border-color: var(--text-3); }
             mark { outline: 1px solid var(--text-1); }
         }
     </style>
@@ -831,7 +861,7 @@
 
                         <div style="text-align: center; margin-bottom: 15px;">
                             <p class="entry-nav-title">
-                                <a id="sheetLink" href="#" target="_blank" class="sheet-link">Recent Entry</a>: <input type="number" id="currentEntryIndex" min="1" value="-" style="width: 52px; padding: 4px 8px; border-radius: 8px; font-weight: 600; text-align: center; font-family: inherit; font-size: 14px;" /> / <span id="totalEntries" class="entry-value">-</span>
+                                <a id="sheetLink" href="#" target="_blank" class="sheet-link">Recent Entry</a>: <input type="number" id="currentEntryIndex" min="1" placeholder="-" style="width: 52px; padding: 4px 8px; border-radius: 8px; font-weight: 600; text-align: center; font-family: inherit; font-size: 14px;" /> / <span id="totalEntries" class="entry-value">-</span>
                             </p>
                             <p class="entry-info" style="margin-top: 5px;">
                                 Name: <span id="currentName" class="entry-value">-</span>
@@ -1018,35 +1048,31 @@
         </div>
 
         <div class="verify-modal-backdrop" id="manageSheetModalBackdrop"></div>
-        <div class="verify-modal" id="manageSheetModal" style="max-width: 1200px;">
-            <div class="verify-modal-content manage-sheet-modal-content">
+        <div class="verify-modal" id="manageSheetModal" style="max-width: 600px;">
+            <div class="verify-modal-content">
                 <button class="verify-modal-close" id="manageSheetModalClose">&times;</button>
-
-                <div class="manage-sheet-column">
-                    <div class="manage-sheet-header">
-                        <h3>Linked Sheets</h3>
-                        <p>View and manage connected Google Sheets</p>
-                    </div>
-                    <div id="manageSheetList" class="manage-sheet-list">
-                        <div class="manage-sheet-loading">
-                            <i class="fas fa-spinner fa-spin"></i>
-                            <p>Loading sheets...</p>
+                <div class="verify-modal-header">
+                    <h2>Database Management</h2>
+                    <p>View, link, and manage connected Google Sheets.</p>
+                </div>
+                <div class="verify-modal-body roles-modal-body">
+                    <div class="manage-sheet-section">
+                        <h3 class="manage-sheet-section-title">Linked Sheets</h3>
+                        <div id="manageSheetList" class="manage-sheet-list">
+                            <div class="manage-sheet-loading">
+                                <i class="fas fa-spinner fa-spin"></i>
+                                <p>Loading sheets...</p>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <div class="manage-sheet-column">
-                    <div class="manage-sheet-header">
-                        <h3>Link New Sheet</h3>
-                        <p>Connect a Google Sheet to access student data</p>
-                    </div>
-
-                    <div class="manage-sheet-form-container">
+                    <div class="manage-sheet-section">
+                        <h3 class="manage-sheet-section-title">Link New Sheet</h3>
                         <div class="manage-note tip">
                             <strong><i class="fas fa-lightbulb"></i> Instructions:</strong> Before linking, share the Google Sheet with <code>calverify@calverify.iam.gserviceaccount.com</code> (grant Viewer access).
                         </div>
 
-                        <form id="manageCsvForm">
+                        <form id="manageCsvForm" class="manage-sheet-form-container">
                             <div class="manage-sheet-input-group">
                                 <label for="manageSheetUrl">Google Sheet URL:</label>
                                 <input type="text" id="manageSheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." required>
@@ -1074,15 +1100,21 @@
             </div>
         </div>
 
-        <div class="keybinds-help-overlay" id="keybindsHelpOverlay">
-            <div class="keybinds-help-content" id="keybindsHelpContent">
-                <h2>Keyboard Shortcuts</h2>
-                <p>Click a keybinding to change it, then press the new key</p>
-                <div class="keybinds-help-list" id="keybindsHelpList"></div>
-                <button id="resetKeybindsBtn" class="verify-btn verify-btn-secondary" style="margin-top: 15px; width: 100%;">
-                    <i class="fas fa-undo"></i> Reset to Defaults
-                </button>
-                <div class="keybinds-help-footer">Press <kbd>/</kbd> or <kbd>Esc</kbd> to close</div>
+        <div class="verify-modal-backdrop" id="keybindsModalBackdrop"></div>
+        <div class="verify-modal" id="keybindsModal" style="max-width: 480px;">
+            <div class="verify-modal-content">
+                <button class="verify-modal-close" id="keybindsModalClose">&times;</button>
+                <div class="verify-modal-header">
+                    <h2>Keyboard Shortcuts</h2>
+                    <p>Click a keybinding to change it, then press the new key</p>
+                </div>
+                <div class="verify-modal-body roles-modal-body">
+                    <div class="keybinds-help-list" id="keybindsHelpList"></div>
+                    <button id="resetKeybindsBtn" class="verify-btn verify-btn-secondary" style="width: 100%;">
+                        <i class="fas fa-undo"></i> Reset to Defaults
+                    </button>
+                    <div class="keybinds-help-footer">Press <kbd>/</kbd> to toggle this menu, or <kbd>Esc</kbd> to close</div>
+                </div>
             </div>
         </div>
 
@@ -1158,12 +1190,47 @@
 
         const darkScheme = window.matchMedia('(prefers-color-scheme: dark)');
 
+        // ===== THEME (light / dark / system) =====
+        function loadTheme() {
+            try {
+                const saved = localStorage.getItem('calverify_theme');
+                if (saved === 'light' || saved === 'dark') return saved;
+            } catch (e) {}
+            return 'system';
+        }
+
+        let themeMode = loadTheme();
+
+        function isDarkActive() {
+            if (themeMode === 'light') return false;
+            if (themeMode === 'dark') return true;
+            return darkScheme.matches;
+        }
+
+        function applyTheme() {
+            if (themeMode === 'system') {
+                document.documentElement.removeAttribute('data-theme');
+            } else {
+                document.documentElement.setAttribute('data-theme', themeMode);
+            }
+            renderGoogleButton();
+        }
+
+        function toggleTheme() {
+            themeMode = themeMode === 'system' ? 'light' : (themeMode === 'light' ? 'dark' : 'system');
+            try { localStorage.setItem('calverify_theme', themeMode); } catch (e) {}
+            applyTheme();
+            const label = themeMode === 'system' ? 'System default' : (themeMode === 'light' ? 'Light' : 'Dark');
+            toast('Theme: ' + label, 'info');
+        }
+
         function renderGoogleButton() {
             if (!window.google || !window.google.accounts) return;
             const el = document.getElementById('googleSignInDiv');
             if (!el) return;
+            el.innerHTML = ''; // clear any previously rendered button so re-renders (theme toggle) don't stack iframes
             google.accounts.id.renderButton(el, {
-                theme: darkScheme.matches ? 'filled_black' : 'outline',
+                theme: isDarkActive() ? 'filled_black' : 'outline',
                 size: 'large',
                 width: 300
             });
@@ -1194,9 +1261,14 @@
                 const sheetLink = document.getElementById('sheetLink');
                 if (cfg.sheet_url) sheetLink.href = cfg.sheet_url;
                 if (window.google && window.google.accounts) {
-                    google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: handleCredential });
+                    google.accounts.id.initialize({
+                        client_id: cfg.google_client_id,
+                        callback: handleCredential,
+                        use_fedcm_for_prompt: true,
+                        use_fedcm_for_button: true
+                    });
                     renderGoogleButton();
-                    darkScheme.addEventListener('change', renderGoogleButton);
+                    darkScheme.addEventListener('change', () => { if (themeMode === 'system') renderGoogleButton(); });
                 }
             } catch (err) {
                 console.error('Failed to load config:', err);
@@ -2348,6 +2420,7 @@
             openModal: 'v',
             editNotes: 'n',
             toggleAutoAdvance: 'a',
+            toggleTheme: 'm',
             showHelp: '/'
         };
 
@@ -2362,6 +2435,7 @@
             openModal: 'Open Verify Modal',
             editNotes: 'Edit Notes',
             toggleAutoAdvance: 'Toggle Auto-Advance',
+            toggleTheme: 'Toggle Light/Dark Mode',
             showHelp: 'Show Keyboard Shortcuts'
         };
 
@@ -2419,13 +2493,37 @@
             if (entryIdx > 0) { entryIdx--; showEntry(); }
         }
 
+        const keybindsModal = document.getElementById('keybindsModal');
+        const keybindsBackdrop = document.getElementById('keybindsModalBackdrop');
+        const keybindsModalClose = document.getElementById('keybindsModalClose');
+
+        function openKeybinds() {
+            keybindsModal.classList.remove('closing');
+            keybindsBackdrop.classList.remove('closing');
+            keybindsModal.classList.add('active');
+            keybindsBackdrop.classList.add('active');
+            renderHelpShortcuts();
+        }
+
+        function closeKeybinds() {
+            if (!keybindsModal.classList.contains('active')) return;
+            keybindsModal.classList.add('closing');
+            keybindsBackdrop.classList.add('closing');
+            listeningForBind = null;
+            setTimeout(() => {
+                if (!keybindsModal.classList.contains('closing')) return;
+                keybindsModal.classList.remove('active', 'closing');
+                keybindsBackdrop.classList.remove('active', 'closing');
+            }, 190);
+        }
+
+        // The keybinds modal is the one exception that toggles open/closed via a single
+        // keybind (default "/") in addition to the normal open button, Esc, X, and outside click.
         function toggleHelp() {
-            const overlay = document.getElementById('keybindsHelpOverlay');
-            if (overlay.style.display === 'flex') {
-                overlay.style.display = 'none';
+            if (keybindsModal.classList.contains('active')) {
+                closeKeybinds();
             } else {
-                renderHelpShortcuts();
-                overlay.style.display = 'flex';
+                openKeybinds();
             }
         }
 
@@ -2461,8 +2559,7 @@
         }
 
         document.addEventListener('keydown', function(e) {
-            var helpOverlay = document.getElementById('keybindsHelpOverlay');
-            if (helpOverlay.style.display === 'flex' && listeningForBind) {
+            if (keybindsModal.classList.contains('active') && listeningForBind) {
                 e.preventDefault();
                 e.stopPropagation();
                 var action = listeningForBind;
@@ -2492,16 +2589,11 @@
             var tag = document.activeElement ? document.activeElement.tagName : '';
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-            if (helpOverlay.style.display === 'flex') {
-                if (e.key === 'Escape') {
-                    helpOverlay.style.display = 'none';
-                    listeningForBind = null;
-                    e.preventDefault();
-                    return;
-                }
+            if (keybindsModal.classList.contains('active')) {
+                // Esc is handled by the shared modal Esc listener below; here we only need
+                // to handle the toggle-closed behavior that's unique to this modal.
                 if (e.key === '/' || e.key === '?') {
-                    helpOverlay.style.display = 'none';
-                    listeningForBind = null;
+                    closeKeybinds();
                     e.preventDefault();
                 }
                 return;
@@ -2530,16 +2622,16 @@
                     break;
                 case 'editNotes': editNotes(); break;
                 case 'toggleAutoAdvance': toggleAutoAdvance(); break;
+                case 'toggleTheme': toggleTheme(); break;
                 case 'showHelp': toggleHelp(); break;
             }
         });
 
         document.getElementById('keybindsBtn').addEventListener('click', toggleHelp);
-        document.getElementById('keybindsHelpOverlay').addEventListener('click', function(e) {
-            if (e.target === this) {
-                this.style.display = 'none';
-                listeningForBind = null;
-            }
+        keybindsModalClose.addEventListener('click', closeKeybinds);
+        keybindsBackdrop.addEventListener('click', closeKeybinds);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && keybindsModal.classList.contains('active')) closeKeybinds();
         });
         document.getElementById('resetKeybindsBtn').addEventListener('click', function() {
             keybinds = { ...DEFAULT_KEYBINDS };
