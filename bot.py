@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from zoneinfo import ZoneInfo
 from discord import app_commands
+from discord.http import Route
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -134,6 +135,57 @@ async def init_bot():
             else:
                 await interaction.response.send_message(message, ephemeral=True)
 
+        @tree.command(name="post", description="Post or edit a message from a raw JSON payload (supports Components V2)", guild=discord.Object(id=GUILD))
+        @app_commands.describe(
+            channel="Channel to post in",
+            payload="JSON file with the message payload",
+            image="Optional image referenced by the payload as attachment://<filename>",
+            message_id="Optional ID of an existing bot message in that channel to edit instead of posting",
+        )
+        @app_commands.default_permissions(manage_guild=True)
+        async def post(
+            interaction: discord.Interaction,
+            channel: discord.TextChannel,
+            payload: discord.Attachment,
+            image: Optional[discord.Attachment] = None,
+            message_id: Optional[str] = None,
+        ):
+            await interaction.response.defer(ephemeral=True)
+            try:
+                body = json.loads((await payload.read()).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as e:
+                await interaction.followup.send(f"Payload is not valid JSON: {e}", ephemeral=True)
+                return
+            if not isinstance(body, dict):
+                await interaction.followup.send("Payload must be a JSON object.", ephemeral=True)
+                return
+            if message_id and not message_id.isdigit():
+                await interaction.followup.send("message_id must be a number.", ephemeral=True)
+                return
+            files = []
+            if image:
+                files.append(discord.File(io.BytesIO(await image.read()), filename=image.filename))
+            try:
+                result = await send_raw_message(channel.id, body, files=files, message_id=int(message_id) if message_id else None)
+            except discord.HTTPException as e:
+                await interaction.followup.send(f"Discord rejected the payload ({e.status}): {e.text}", ephemeral=True)
+                return
+            link = f"https://discord.com/channels/{GUILD}/{channel.id}/{result['id']}"
+            verb = "Edited" if message_id else "Posted"
+            await interaction.followup.send(f"{verb} in {channel.mention}: {link}", ephemeral=True)
+
+        @post.error
+        async def post_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+            logger.error(f"Error in /post: {error}", exc_info=True)
+            if isinstance(error, app_commands.MissingPermissions):
+                message = "You need the **Manage Server** permission to run this."
+            else:
+                message = "Something went wrong posting the message."
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+
         @client.event
         async def on_ready():
             global guild
@@ -210,6 +262,21 @@ async def cache_roles():
                 logger.warning(f"Role not found in guild: {role_name}")
     except Exception as e:
         logger.error(f"Error caching roles: {str(e)}")
+
+
+async def send_raw_message(channel_id: int, payload: Dict[str, Any], files: Optional[List[discord.File]] = None, message_id: Optional[int] = None) -> Dict[str, Any]:
+    """Send or edit a message with a raw API payload. Bypasses discord.py's models so
+    Components V2 payloads (flags 32768) work on the pinned discord.py version."""
+    if message_id:
+        route = Route("PATCH", "/channels/{channel_id}/messages/{message_id}", channel_id=channel_id, message_id=message_id)
+    else:
+        route = Route("POST", "/channels/{channel_id}/messages", channel_id=channel_id)
+    if not files:
+        return await client.http.request(route, json=payload)
+    form = [{"name": "payload_json", "value": json.dumps(payload)}]
+    for i, f in enumerate(files):
+        form.append({"name": f"files[{i}]", "value": f.fp, "filename": f.filename, "content_type": "application/octet-stream"})
+    return await client.http.request(route, form=form, files=files)
 
 
 async def get_user(username: str) -> Optional[discord.Member]:
