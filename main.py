@@ -1,16 +1,17 @@
 import os
 import logging
-import polars as pl
 import time
 import asyncio
 import uuid
 import uvicorn
 import json
 import re
+import threading
+import ctypes
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from pathlib import Path
 from typing import Dict, List, Any
@@ -24,6 +25,7 @@ from google.auth.transport import requests as google_requests
 from googleapiclient.discovery import build
 
 from bot import init_bot, get_user, get_profile, assign_role
+import store
 
 load_dotenv()
 
@@ -38,6 +40,7 @@ SHEET_ID = os.getenv("VERIFICATION_FORM_SHEET_ID")
 MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
 
 sheets, sid = None, None
+sheets_lock = threading.Lock()  # the Google API client is not thread-safe
 
 def init_sheets():
     global sheets, sid
@@ -182,46 +185,6 @@ async def cleanup_sessions():
         if expired:
             logger.info(f"Cleaned up {len(expired)} expired sessions")
 
-dfs: Dict[str, pl.DataFrame] = {}
-meta: Dict[str, Dict[str, Any]] = {}
-
-def load_csvs():
-    calverify_dir = Path(__file__).parent / "data"
-    csv_files = list(calverify_dir.glob("*.csv"))
-    logger.info(f"Found {len(csv_files)} CSV files")
-    for csv_file in csv_files:
-        try:
-            df = pl.read_csv(csv_file)
-            name = csv_file.name
-            dfs[name] = df
-            mod = os.path.getmtime(csv_file)
-            mod_dt = datetime.fromtimestamp(mod, tz=timezone.utc)
-            meta[name] = {"last_modified_iso": mod_dt.isoformat(), "total_rows": len(df)}
-            logger.info(f"Loaded {name} with {len(df)} rows (modified: {mod_dt.isoformat()})")
-        except Exception as e:
-            logger.error(f"Error loading {csv_file.name}: {str(e)}")
-    logger.info(f"Successfully loaded {len(dfs)} DataFrames")
-
-def search_dfs(query: str) -> Dict[str, List[Dict[str, Any]]]:
-    results = {}
-    qlower = query.lower()
-    for name, df in dfs.items():
-        cond = None
-        for col in df.columns:
-            c = pl.col(col).cast(pl.Utf8).str.to_lowercase().str.contains(qlower)
-            cond = c if cond is None else (cond | c)
-        if cond is not None:
-            rows = df.filter(cond).to_dicts()
-            if rows:
-                results[name] = rows
-    return results
-
-def reload_csvs():
-    global dfs, meta
-    dfs.clear()
-    meta.clear()
-    load_csvs()
-
 def load_manifest() -> Dict[str, Any]:
     path = Path(__file__).parent / "manifest.json"
     default = {"sheetFiles": {}, "authorizedEmails": []}
@@ -317,6 +280,7 @@ def download_sheet(drive, ss, sheet_id: str, gid: str = "0") -> tuple:
                 tmp_path.unlink()
             return None, None, None
         try:
+            import polars as pl
             df = pl.read_excel(tmp_path, sheet_name=sname)
         except Exception as e:
             logger.error(f"Error reading sheet '{sname}': {str(e)}")
@@ -333,24 +297,33 @@ def download_sheet(drive, ss, sheet_id: str, gid: str = "0") -> tuple:
         return None, None, None
 
 
-def fetch_entries(with_format: bool = True) -> List[Dict[str, Any]]:
+def trim_memory():
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
+def fetch_entries() -> List[Dict[str, Any]]:
     if not sheets:
         logger.error("Google Sheets API not initialized")
         return []
     try:
-        sp_data = sheets.spreadsheets().get(
-            spreadsheetId=SHEET_ID,
-            includeGridData=True,
-            ranges=["Form Responses 1!B:I"],
-            fields=(
-                "sheets/data/rowData/values(userEnteredValue,userEnteredFormat/backgroundColor)"
-                if with_format
-                else "sheets/data/rowData/values(userEnteredValue)"
-            ),
-        ).execute()
-        sd = sp_data.get('sheets', [{}])[0]
-        rd = sd.get('data', [{}])[0].get('rowData', [])
-        if len(rd) < 2:
+        with sheets_lock:
+            res = sheets.spreadsheets().values().batchGet(
+                spreadsheetId=SHEET_ID,
+                ranges=["Form Responses 1!B:I"],
+                valueRenderOption="FORMULA",
+            ).execute()
+            fmt = sheets.spreadsheets().get(
+                spreadsheetId=SHEET_ID,
+                includeGridData=True,
+                ranges=["Form Responses 1!B:B"],
+                fields="sheets/data/rowData/values/userEnteredFormat/backgroundColor",
+            ).execute()
+        rows = res.get("valueRanges", [{}])[0].get("values", [])
+        frd = fmt.get('sheets', [{}])[0].get('data', [{}])[0].get('rowData', [])
+        if len(rows) < 2:
             logger.warning("No student entries found in sheet")
             return []
 
@@ -362,53 +335,37 @@ def fetch_entries(with_format: bool = True) -> List[Dict[str, Any]]:
             b = round((c.get('blue', 0) or 0) * 255)
             return f"#{r:02x}{g:02x}{b:02x}"
 
-        sc = 0
-        nc = 1
-        ec = 0
-        gc = 3
-        dc = 4
-        sic = 5
-        noc = 6
-        dic = 7
+        def text(row, i):
+            if len(row) <= i:
+                return ""
+            v = row[i]
+            if isinstance(v, str):
+                return "" if v.startswith("=") else v.strip()
+            if isinstance(v, bool):
+                return str(v)
+            return str(v)
 
         entries = []
-        for idx in range(len(rd) - 1, 0, -1):
-            rfd = rd[idx]
-            vs = rfd.get('values', [])
-            row = []
-            for cell in vs:
-                val = cell.get('userEnteredValue', {})
-                if 'stringValue' in val:
-                    row.append(val['stringValue'])
-                elif 'numberValue' in val:
-                    row.append(str(val['numberValue']))
-                elif 'boolValue' in val:
-                    row.append(str(val['boolValue']))
-                else:
-                    row.append('')
-            name = row[nc] if len(row) > nc else ""
-            email = row[ec] if len(row) > ec else ""
-            grad = row[gc] if len(row) > gc else ""
-            disc = row[dc] if len(row) > dc else ""
-            sid_val = row[sic] if len(row) > sic else ""
-            notes = row[noc] if len(row) > noc else ""
-            did = row[dic] if len(row) > dic else ""
-            if not sid_val.strip():
+        for idx in range(len(rows) - 1, 0, -1):
+            row = rows[idx]
+            sid_val = text(row, 5)
+            if not sid_val:
                 continue
             bg = None
-            if sc < len(vs):
-                fmt = vs[sc].get('userEnteredFormat', {})
-                bgd = fmt.get('backgroundColor', {})
-                bg = rgb_hex(bgd) if bgd else None
+            if idx < len(frd):
+                vs = frd[idx].get('values', [])
+                if vs:
+                    bgd = vs[0].get('userEnteredFormat', {}).get('backgroundColor', {})
+                    bg = rgb_hex(bgd) if bgd else None
             entries.append({
                 "row_index": idx,
-                "name": name.strip(),
-                "email": email.strip(),
-                "graduating_class": grad.strip(),
-                "discord_username": disc.strip(),
-                "student_id": sid_val.strip(),
-                "notes": notes.strip(),
-                "discord_user_id": did.strip(),
+                "name": text(row, 1),
+                "email": text(row, 0),
+                "graduating_class": text(row, 3),
+                "discord_username": text(row, 4),
+                "student_id": sid_val,
+                "notes": text(row, 6),
+                "discord_user_id": text(row, 7),
                 "background_color": bg,
             })
         logger.info(f"Fetched {len(entries)} student entries from Google Sheet")
@@ -416,41 +373,65 @@ def fetch_entries(with_format: bool = True) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching student entries: {str(e)}")
         return []
+    finally:
+        res = fmt = rows = frd = None
+        trim_memory()
 
 
+def fetch_rows_after(row_index: int) -> List[Dict[str, Any]]:
+    """Entries below the given 0-based row index, values only."""
+    if not sheets:
+        return []
+    with sheets_lock:
+        res = sheets.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=f"Form Responses 1!B{row_index + 2}:I",
+            valueRenderOption="UNFORMATTED_VALUE",
+        ).execute()
+    out = []
+    for offset, row in enumerate(res.get("values", [])):
+        row = [str(v) for v in row]
+        sid_val = row[5].strip() if len(row) > 5 else ""
+        if not sid_val:
+            continue
+        out.append({
+            "row_index": row_index + 1 + offset,
+            "name": row[1].strip() if len(row) > 1 else "",
+            "email": row[0].strip(),
+            "student_id": sid_val,
+        })
+    return out
 
 
 async def monitor_entries():
     logger.info("Initializing background entry monitor...")
     await asyncio.sleep(5)
-    initial = fetch_entries(with_format=False)
-    last_max = max([e["row_index"] for e in initial]) if initial else 0
+    last_max = 0
+    try:
+        initial = await asyncio.to_thread(fetch_rows_after, 0)
+        last_max = max([e["row_index"] for e in initial]) if initial else 0
+    except Exception as e:
+        logger.error(f"Error initializing monitor_entries: {e}")
     logger.info(f"Monitor started. Current max row: {last_max}")
     while True:
         await asyncio.sleep(60)
         try:
-            entries = fetch_entries(with_format=False)
-            if not entries:
+            new = await asyncio.to_thread(fetch_rows_after, last_max)
+            if not new:
                 continue
-            cur_max = max([e["row_index"] for e in entries])
-            if cur_max > last_max:
-                new = [e for e in entries if e["row_index"] > last_max]
-                for entry in new:
-                    sid_val = entry.get("student_id", "").strip()
-                    if not sid_val:
-                        continue
-                    results = search_dfs(sid_val)
-                    total = sum(len(v) for v in results.values())
-                    if total >= 1:
-                        logger.info(f"New submission from {entry.get('name')} ({entry.get('email')})")
-                last_max = cur_max
+            for entry in new:
+                total = await asyncio.to_thread(store.count, entry["student_id"])
+                if total >= 1:
+                    logger.info(f"New submission from {entry.get('name')} ({entry.get('email')})")
+            last_max = max(e["row_index"] for e in new)
         except Exception as e:
             logger.error(f"Error in monitor_entries loop: {e}")
 
 
 @app.on_event("startup")
 async def startup_event():
-    load_csvs()
+    store.conn()
+    logger.info(f"Student database ready with {len(store.meta())} sheets")
     init_sheets()
     asyncio.create_task(monitor_entries())
     asyncio.create_task(session_cleanup_loop())
@@ -523,10 +504,16 @@ async def logout(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     template_path = Path(__file__).parent / "templates" / "index.html"
-    if template_path.exists():
-        with open(template_path, "r") as f:
-            return f.read()
-    return "<h1>Template not found</h1>"
+    if not template_path.exists():
+        return "<h1>Template not found</h1>"
+    stat = template_path.stat()
+    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match", "").removeprefix("W/") == etag:
+        return Response(status_code=304, headers=headers)
+    return HTMLResponse(template_path.read_text(), headers=headers)
+
+SEARCH_ROW_LIMIT = 50  # rows returned per sheet; the page shows no more than this
 
 @app.post("/search")
 async def search(request: Request, q: str):
@@ -536,14 +523,21 @@ async def search(request: Request, q: str):
     if rate_limited(ip, searches, SEARCH_MAX, SEARCH_WIN):
         logger.warning(f"Search rate limit exceeded for IP: {ip}")
         raise HTTPException(status_code=429, detail="Too many search requests. Please slow down.")
+    meta = store.meta()
+    total = sum(m["total_rows"] for m in meta.values())
     if not q or len(q.strip()) == 0:
-        return {"results": {}, "query": q, "metadata": {}, "total_database_rows": sum(m.get("total_rows", 0) for m in meta.values())}
-    results = search_dfs(q.strip())
-    res = {}
-    for name, rows in results.items():
-        res[name] = {"rows": rows, "last_modified_iso": meta.get(name, {}).get("last_modified_iso", "Unknown"), "total_rows": meta.get(name, {}).get("total_rows", 0)}
-    total = sum(m.get("total_rows", 0) for m in meta.values())
-    return {"results": res, "query": q, "total_matches": sum(len(v["rows"]) for v in res.values()), "total_database_rows": total}
+        return {"results": {}, "query": q, "metadata": {}, "total_database_rows": total}
+    results = await asyncio.to_thread(store.search, q.strip(), SEARCH_ROW_LIMIT)
+    files = []
+    for name, found in results.items():
+        info = meta.get(name, {})
+        files.append(
+            json.dumps(name) + ':{"rows":[' + ",".join(found["rows"]) + '],"match_count":%d,"last_modified_iso":%s,"total_rows":%d}'
+            % (found["match_count"], json.dumps(info.get("last_modified_iso", "Unknown")), info.get("total_rows", 0))
+        )
+    matches = sum(found["match_count"] for found in results.values())
+    body = '{"results":{%s},"query":%s,"total_matches":%d,"total_database_rows":%d}' % (",".join(files), json.dumps(q), matches, total)
+    return Response(content=body, media_type="application/json")
 
 @app.get("/student-entries")
 async def get_entries(request: Request):
@@ -552,7 +546,7 @@ async def get_entries(request: Request):
     ip = client_ip(request)
     if rate_limited(ip, searches, SEARCH_MAX, SEARCH_WIN):
         raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
-    entries = fetch_entries()
+    entries = await asyncio.to_thread(fetch_entries)
     return {"entries": entries, "total_count": len(entries), "success": len(entries) > 0}
 
 @app.post("/update-entry-color")
@@ -598,7 +592,8 @@ async def set_color(request: Request):
                     "fields": "userEnteredValue"
                 }
             })
-        sheets.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": reqs}).execute()
+        with sheets_lock:
+            sheets.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": reqs}).execute()
         logger.info(f"Updated color for row {row_idx} to {color}" + (f" and discord_user_id to '{discord_user_id}'" if discord_user_id is not None else ""))
         return {"success": True, "message": "Color updated successfully"}
     except Exception as e:
@@ -624,10 +619,11 @@ async def set_notes(request: Request):
         if not sheets:
             raise Exception("Google Sheets API not initialized")
         cell = f"'Form Responses 1'!H{row_idx + 1}"
-        sheets.spreadsheets().values().update(
-            spreadsheetId=SHEET_ID, range=cell, valueInputOption="USER_ENTERED",
-            body={"values": [[text]]}
-        ).execute()
+        with sheets_lock:
+            sheets.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID, range=cell, valueInputOption="USER_ENTERED",
+                body={"values": [[text]]}
+            ).execute()
         logger.info(f"Updated notes for row {row_idx}")
         return {"success": True, "message": "Notes updated successfully"}
     except Exception as e:
@@ -653,10 +649,11 @@ async def set_discord_user(request: Request):
         if not sheets:
             raise Exception("Google Sheets API not initialized")
         cell = f"'Form Responses 1'!F{row_idx + 1}"
-        sheets.spreadsheets().values().update(
-            spreadsheetId=SHEET_ID, range=cell, valueInputOption="USER_ENTERED",
-            body={"values": [[username]]}
-        ).execute()
+        with sheets_lock:
+            sheets.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID, range=cell, valueInputOption="USER_ENTERED",
+                body={"values": [[username]]}
+            ).execute()
         logger.info(f"Updated discord username for row {row_idx} to '{username}'")
         return {"success": True, "message": "Discord username updated successfully"}
     except Exception as e:
@@ -848,29 +845,23 @@ async def link_sheet(request: Request):
         )
         drive = build('drive', 'v3', credentials=creds)
         ss = build('sheets', 'v4', credentials=creds)
-        csv_content, sp_name, sname = download_sheet(drive, ss, sheet_id, gid)
+        csv_content, sp_name, sname = await asyncio.to_thread(download_sheet, drive, ss, sheet_id, gid)
         if not csv_content or not sname:
             raise HTTPException(status_code=400, detail="Failed to access sheet. Ensure it is shared with the service account (Viewer access) and is a native Google Sheet or XLSX file.")
         filename = f"{sp_name}.csv"
-        data_dir = Path(__file__).parent / "data"
-        data_dir.mkdir(exist_ok=True)
-        out = data_dir / filename
         manifest = load_manifest()
-        if out.exists():
+        if store.exists(filename):
             existing = manifest.get("sheetFiles", {}).get(filename)
             if existing and existing.get("sheetId") != sheet_id:
                 counter = 2
                 while True:
                     new_name = f"{sp_name} {counter}.csv"
-                    new_path = data_dir / new_name
                     new_info = manifest.get("sheetFiles", {}).get(new_name)
-                    if not new_path.exists() or (new_info and new_info.get("sheetId") == sheet_id):
+                    if not store.exists(new_name) or (new_info and new_info.get("sheetId") == sheet_id):
                         filename = new_name
-                        out = new_path
                         break
                     counter += 1
-        with open(out, 'w') as f:
-            f.write(csv_content)
+        await asyncio.to_thread(store.store_csv, filename, csv_content.encode(), datetime.now(tz=timezone.utc).isoformat())
         logger.info(f"Successfully linked sheet: {filename}")
         manifest = load_manifest()
         manifest["sheetFiles"][filename] = {
@@ -878,7 +869,6 @@ async def link_sheet(request: Request):
             "spreadsheetName": sp_name, "uploadedAt": datetime.now(tz=timezone.utc).isoformat()
         }
         save_manifest(manifest)
-        reload_csvs()
         return {"success": True, "message": "Sheet linked successfully", "filename": filename, "sheetName": sname}
     except HTTPException:
         raise
@@ -903,17 +893,13 @@ async def delete_sheet(request: Request):
     if "/" in filename or "\\" in filename or filename.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid filename")
     try:
-        data_dir = Path(__file__).parent / "data"
-        path = data_dir / filename
-        if not path.exists():
+        if not await asyncio.to_thread(store.delete, filename):
             raise HTTPException(status_code=404, detail="File not found")
-        path.unlink()
         logger.info(f"Unlinked sheet: {filename}")
         manifest = load_manifest()
         if filename in manifest.get("sheetFiles", {}):
             del manifest["sheetFiles"][filename]
             save_manifest(manifest)
-        reload_csvs()
         return {"success": True, "message": "Sheet unlinked successfully", "filename": filename}
     except HTTPException:
         raise
@@ -943,22 +929,18 @@ async def rename_sheet(request: Request):
     if "/" in new_name or "\\" in new_name or new_name.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid new name")
     try:
-        data_dir = Path(__file__).parent / "data"
-        path = data_dir / filename
         new_filename = f"{new_name}.csv"
-        new_path = data_dir / new_filename
-        if not path.exists():
+        if not store.exists(filename):
             raise HTTPException(status_code=404, detail="File not found")
-        if new_path.exists() and new_filename != filename:
+        if store.exists(new_filename) and new_filename != filename:
             raise HTTPException(status_code=400, detail="A file with that name already exists")
-        path.rename(new_path)
+        store.rename(filename, new_filename)
         logger.info(f"Renamed sheet: {filename} -> {new_filename}")
         manifest = load_manifest()
         if filename in manifest.get("sheetFiles", {}):
             fm = manifest["sheetFiles"].pop(filename)
             manifest["sheetFiles"][new_filename] = fm
             save_manifest(manifest)
-        reload_csvs()
         return {"success": True, "message": "Sheet renamed successfully", "oldFilename": filename, "newFilename": new_filename}
     except HTTPException:
         raise
