@@ -333,7 +333,7 @@ def download_sheet(drive, ss, sheet_id: str, gid: str = "0") -> tuple:
         return None, None, None
 
 
-def fetch_entries() -> List[Dict[str, Any]]:
+def fetch_entries(with_format: bool = True) -> List[Dict[str, Any]]:
     if not sheets:
         logger.error("Google Sheets API not initialized")
         return []
@@ -342,7 +342,11 @@ def fetch_entries() -> List[Dict[str, Any]]:
             spreadsheetId=SHEET_ID,
             includeGridData=True,
             ranges=["Form Responses 1!B:I"],
-            fields="sheets/data/rowData/values(userEnteredValue,userEnteredFormat/backgroundColor)"
+            fields=(
+                "sheets/data/rowData/values(userEnteredValue,userEnteredFormat/backgroundColor)"
+                if with_format
+                else "sheets/data/rowData/values(userEnteredValue)"
+            ),
         ).execute()
         sd = sp_data.get('sheets', [{}])[0]
         rd = sd.get('data', [{}])[0].get('rowData', [])
@@ -419,13 +423,13 @@ def fetch_entries() -> List[Dict[str, Any]]:
 async def monitor_entries():
     logger.info("Initializing background entry monitor...")
     await asyncio.sleep(5)
-    initial = fetch_entries()
+    initial = fetch_entries(with_format=False)
     last_max = max([e["row_index"] for e in initial]) if initial else 0
     logger.info(f"Monitor started. Current max row: {last_max}")
     while True:
         await asyncio.sleep(60)
         try:
-            entries = fetch_entries()
+            entries = fetch_entries(with_format=False)
             if not entries:
                 continue
             cur_max = max([e["row_index"] for e in entries])

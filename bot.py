@@ -5,8 +5,6 @@ import asyncio
 import json
 import io
 import aiosqlite
-import matplotlib
-import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from zoneinfo import ZoneInfo
@@ -17,7 +15,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-matplotlib.use("Agg")
+
+
+def _pyplot():
+    """Import matplotlib on first chart render; it costs ~40 MB when loaded."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    return plt
 
 client: Optional[discord.Client] = None
 guild: Optional[discord.Guild] = None
@@ -639,6 +644,7 @@ def render_hour_histogram(counts_by_hour: List[int], peak_hour: Optional[int]) -
     hours = list(range(24))
     colors = [BERKELEY_BLUE if h == peak_hour else BERKELEY_GOLD for h in hours]
 
+    plt = _pyplot()
     fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
     ax.bar(hours, counts_by_hour, color=colors, edgecolor="white", linewidth=0.5)
     ax.set_xticks(hours)
@@ -659,6 +665,7 @@ def render_weekday_histogram(counts_by_day: Dict[str, int], peak_day: Optional[s
     values = list(counts_by_day.values())
     colors = [BERKELEY_BLUE if d == peak_day else BERKELEY_GOLD for d in days]
 
+    plt = _pyplot()
     fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
     ax.bar(days, values, color=colors, edgecolor="white", linewidth=0.5)
     ax.tick_params(axis="x", labelsize=8)
